@@ -1,0 +1,28 @@
+# Build outputs
+**/bin/
+**/obj/
+**/out/
+
+# IDEs
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local runtime
+logs/
+*.log
+appsettings.Local.json
+
+# Secrets — never commit; override via dotnet user-secrets (UserSecretsId: vet-system-secrets)
+.env
+.env.local
+.env.prod
+
+# Tool restores
+.nuke/temp/

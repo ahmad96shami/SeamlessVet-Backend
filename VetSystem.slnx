@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/VetSystem.API/VetSystem.API.csproj" />
+    <Project Path="src/VetSystem.Application/VetSystem.Application.csproj" />
+    <Project Path="src/VetSystem.Domain/VetSystem.Domain.csproj" />
+    <Project Path="src/VetSystem.Infrastructure/VetSystem.Infrastructure.csproj" />
+  </Folder>
+</Solution>

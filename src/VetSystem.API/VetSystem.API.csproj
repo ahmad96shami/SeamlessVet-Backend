@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <RootNamespace>VetSystem.API</RootNamespace>
+    <UserSecretsId>vet-system-secrets</UserSecretsId>
+    <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VetSystem.Application\VetSystem.Application.csproj" />
+    <ProjectReference Include="..\VetSystem.Infrastructure\VetSystem.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>
