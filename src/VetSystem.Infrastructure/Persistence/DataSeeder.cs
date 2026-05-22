@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using VetSystem.Application.Common;
 using VetSystem.Domain.Common;
@@ -9,8 +10,7 @@ namespace VetSystem.Infrastructure.Persistence;
 
 /// <summary>
 /// Idempotent bootstrap seeder. Source of truth for first-run data (per <c>vet-backend/CLAUDE.md</c>).
-/// Order: migrate → bootstrap env → roles → permissions → role-permission defaults.
-/// M1/20 appends the bootstrap admin user; later milestones append their own steps inside this class.
+/// Order: migrate → bootstrap env → roles → permissions → role-permission defaults → bootstrap admin.
 /// </summary>
 public sealed class DataSeeder
 {
@@ -19,13 +19,23 @@ public sealed class DataSeeder
     private readonly ApplicationDbContext _db;
     private readonly IClock _clock;
     private readonly IGuidV7Generator _ids;
+    private readonly IPasswordHasher _hasher;
+    private readonly IConfiguration _configuration;
     private readonly ILogger<DataSeeder> _logger;
 
-    public DataSeeder(ApplicationDbContext db, IClock clock, IGuidV7Generator ids, ILogger<DataSeeder> logger)
+    public DataSeeder(
+        ApplicationDbContext db,
+        IClock clock,
+        IGuidV7Generator ids,
+        IPasswordHasher hasher,
+        IConfiguration configuration,
+        ILogger<DataSeeder> logger)
     {
         _db = db;
         _clock = clock;
         _ids = ids;
+        _hasher = hasher;
+        _configuration = configuration;
         _logger = logger;
     }
 
@@ -52,6 +62,8 @@ public sealed class DataSeeder
             await SeedPermissionsAsync(env.Id, cancellationToken);
             await SeedRolePermissionDefaultsAsync(env.Id, cancellationToken);
         }
+
+        await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
     }
 
     private async Task SeedBootstrapEnvironmentAsync(CancellationToken cancellationToken)
@@ -184,6 +196,55 @@ public sealed class DataSeeder
         {
             await _db.SaveChangesAsync(cancellationToken);
         }
+    }
+
+    private async Task SeedBootstrapAdminAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        var section = _configuration.GetSection("BootstrapAdmin");
+        var phone = section["PhonePrimary"];
+        var password = section["Password"];
+
+        if (string.IsNullOrWhiteSpace(phone) || string.IsNullOrWhiteSpace(password)
+            || password.StartsWith("PLACEHOLDER", StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "BootstrapAdmin:Password not configured (placeholder still in appsettings). "
+                + "Skipping admin user seed. Set via dotnet user-secrets to enable.");
+            return;
+        }
+
+        var exists = await _db.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u => u.EnvironmentId == environmentId && u.PhonePrimary == phone, cancellationToken);
+
+        if (exists)
+        {
+            return;
+        }
+
+        var adminRole = await _db.Roles
+            .IgnoreQueryFilters()
+            .FirstAsync(
+                r => r.EnvironmentId == environmentId && r.Key == RoleKey.Admin,
+                cancellationToken);
+
+        var now = _clock.UtcNow;
+        _db.Users.Add(new User
+        {
+            EnvironmentId = environmentId,
+            RoleId = adminRole.Id,
+            FullName = section["FullName"] ?? "Bootstrap Admin",
+            PhonePrimary = phone,
+            Email = section["Email"],
+            PasswordHash = _hasher.Hash(password),
+            Status = UserStatus.Active,
+            NumberPrefix = "ADM",
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Seeded bootstrap admin user in environment {EnvironmentId}", environmentId);
     }
 
     private async Task ClearAsync(CancellationToken cancellationToken)

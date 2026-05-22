@@ -9,6 +9,7 @@
 // Errors:    Domain exceptions → `{ code, message, fieldErrors? }` via ExceptionHandlingMiddleware.
 
 using System.Text;
+using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using NSwag;
@@ -42,7 +43,18 @@ builder.Services.Configure<PowerSyncOptions>(builder.Configuration.GetSection(Po
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, HttpCurrentUserAccessor>();
+builder.Services.AddScoped<IRequestEnvironmentResolver, RequestEnvironmentResolver>();
 builder.Services.AddSingleton<IPowerSyncTokenService, PowerSyncTokenService>();
+
+// M1 — identity, RBAC, admin approval
+builder.Services.AddSingleton<IPasswordHasher, VetSystem.Infrastructure.Identity.BCryptPasswordHasher>();
+builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
+builder.Services.AddScoped<IRefreshTokenStore, VetSystem.Infrastructure.Identity.EfRefreshTokenStore>();
+builder.Services.AddScoped<IPermissionResolver, VetSystem.Infrastructure.Identity.PermissionResolver>();
+builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator,
+    VetSystem.Infrastructure.Identity.NumberPrefixGenerator>();
+builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<UserAdminService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
