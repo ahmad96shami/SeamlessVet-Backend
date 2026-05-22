@@ -56,6 +56,9 @@ builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<UserAdminService>();
 
+// M2 — catalog + system settings
+builder.Services.AddScoped<VetSystem.API.Catalog.ProductsAdminService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
