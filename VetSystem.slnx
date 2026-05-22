@@ -5,4 +5,7 @@
     <Project Path="src/VetSystem.Domain/VetSystem.Domain.csproj" />
     <Project Path="src/VetSystem.Infrastructure/VetSystem.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/VetSystem.Tests/VetSystem.Tests.csproj" />
+  </Folder>
 </Solution>
