@@ -4,4 +4,11 @@
 # (M2 reference: products + services; M3+ doctor_scope: assigned customers, pets, ledgers, visits,
 # field inventory, etc.) so the mobile client can pull rows the moment a milestone lands.
 
-bucket_definitions: {}
+bucket_definitions:
+
+  # M2 — Reference data, same for every field doctor (pull-only on the client).
+  # Writes happen through /admin/products and /admin/services; the device cannot mutate this bucket.
+  reference:
+    data:
+      - SELECT * FROM products WHERE deleted_at IS NULL
+      - SELECT * FROM services WHERE deleted_at IS NULL
