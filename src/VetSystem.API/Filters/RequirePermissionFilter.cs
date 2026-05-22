@@ -5,10 +5,15 @@ namespace VetSystem.API.Filters;
 
 /// <summary>
 /// Permission gate applied at route-group level alongside <c>RequireAuthorization()</c>.
-/// M0 reads the user's permissions straight off <see cref="ICurrentUserAccessor.Permissions"/>
-/// (the <c>perms</c> claim, populated once M1 issues access tokens). M1/18 rewires this filter
-/// to consult <c>IPermissionResolver</c> so role + per-user-override resolution is centralized.
+/// Resolves the user's effective permissions via <see cref="IPermissionResolver"/> (role
+/// defaults + per-user overrides, cached for 5 minutes — invalidate from admin endpoints
+/// when overrides change).
 /// </summary>
+/// <remarks>
+/// <b>Policy-name convention.</b> Use the dot-notation permission key from
+/// <c>VetSystem.Domain.Entities.PermissionKey</c> directly — e.g.
+/// <c>group.RequirePermission(PermissionKey.UsersApprove)</c>. The key is the policy name.
+/// </remarks>
 public sealed class RequirePermissionFilter : IEndpointFilter
 {
     private readonly string _permission;
@@ -21,12 +26,15 @@ public sealed class RequirePermissionFilter : IEndpointFilter
     public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
         var user = context.HttpContext.RequestServices.GetRequiredService<ICurrentUserAccessor>();
-        if (!user.IsAuthenticated)
+        if (!user.IsAuthenticated || user.UserId is not { } userId || user.EnvironmentId is not { } envId)
         {
             throw new ForbiddenException("unauthenticated", "Authentication required.");
         }
 
-        if (!user.Permissions.Contains(_permission, StringComparer.OrdinalIgnoreCase))
+        var resolver = context.HttpContext.RequestServices.GetRequiredService<IPermissionResolver>();
+        var perms = await resolver.ResolveAsync(userId, envId, context.HttpContext.RequestAborted);
+
+        if (!perms.Contains(_permission))
         {
             throw new ForbiddenException("missing_permission", $"Required permission '{_permission}' is not granted.");
         }
