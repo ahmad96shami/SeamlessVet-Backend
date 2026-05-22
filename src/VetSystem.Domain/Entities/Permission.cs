@@ -23,6 +23,7 @@ public static class PermissionKey
 
     // Settings & catalog (M2)
     public const string SettingsWrite = "settings.write";
+    public const string CatalogWrite = "catalog.write";
 
     // Contracts (M8)
     public const string ContractsActivate = "contracts.activate";
@@ -40,7 +41,7 @@ public static class PermissionKey
     public static readonly IReadOnlyCollection<string> All =
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
-        SettingsWrite,
+        SettingsWrite, CatalogWrite,
         ContractsActivate,
         InvoicesRefund, InvoicesVoid,
         InventoryAdjust,

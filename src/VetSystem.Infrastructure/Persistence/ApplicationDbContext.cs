@@ -29,6 +29,10 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<RegistrationRequest> RegistrationRequests => Set<RegistrationRequest>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
 
+    public DbSet<Product> Products => Set<Product>();
+    public DbSet<Service> Services => Set<Service>();
+    public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.
