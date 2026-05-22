@@ -33,6 +33,11 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<Service> Services => Set<Service>();
     public DbSet<SystemSettings> SystemSettings => Set<SystemSettings>();
 
+    public DbSet<Customer> Customers => Set<Customer>();
+    public DbSet<Pet> Pets => Set<Pet>();
+    public DbSet<Ledger> Ledgers => Set<Ledger>();
+    public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.
