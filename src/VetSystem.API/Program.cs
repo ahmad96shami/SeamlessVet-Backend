@@ -61,6 +61,12 @@ builder.Services.AddScoped<VetSystem.API.Catalog.ProductsAdminService>();
 builder.Services.AddScoped<VetSystem.API.Catalog.ServicesAdminService>();
 builder.Services.AddScoped<VetSystem.API.Settings.SystemSettingsAdminService>();
 
+// M3 — customers, pets, ledgers
+builder.Services.AddScoped<VetSystem.API.Customers.CustomersService>();
+builder.Services.AddScoped<VetSystem.API.Pets.PetsService>();
+builder.Services.AddScoped<VetSystem.Application.Ledgers.ILedgerService,
+    VetSystem.Infrastructure.Ledgers.LedgerService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
