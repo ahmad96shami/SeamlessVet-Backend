@@ -61,6 +61,7 @@ public sealed class DataSeeder
             await SeedRolesAsync(env.Id, cancellationToken);
             await SeedPermissionsAsync(env.Id, cancellationToken);
             await SeedRolePermissionDefaultsAsync(env.Id, cancellationToken);
+            await SeedSystemSettingsAsync(env.Id, cancellationToken);
         }
 
         await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
@@ -198,6 +199,32 @@ public sealed class DataSeeder
         }
     }
 
+    private async Task SeedSystemSettingsAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        var exists = await _db.SystemSettings
+            .IgnoreQueryFilters()
+            .AnyAsync(s => s.EnvironmentId == environmentId, cancellationToken);
+
+        if (exists)
+        {
+            return;
+        }
+
+        _db.SystemSettings.Add(new SystemSettings
+        {
+            EnvironmentId = environmentId,
+            DefaultExamFee = 0m,
+            EntitlementEnabledGlobal = true,
+            LowStockThresholdPct = 0m,
+            ExpirationWarningDays = 30,
+            TaxEnabled = false,
+            TaxRate = 0m,
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Seeded default system_settings row for environment {EnvironmentId}", environmentId);
+    }
+
     private async Task SeedBootstrapAdminAsync(Guid environmentId, CancellationToken cancellationToken)
     {
         var section = _configuration.GetSection("BootstrapAdmin");
@@ -261,6 +288,9 @@ public sealed class DataSeeder
               permissions,
               idempotency_keys,
               sync_test_records,
+              system_settings,
+              products,
+              services,
               environments
             RESTART IDENTITY CASCADE;
             """,
@@ -277,8 +307,9 @@ public sealed class DataSeeder
                 PermissionKey.InvoicesVoid,
                 PermissionKey.ReportsRead,
                 PermissionKey.SettingsWrite,
+                PermissionKey.CatalogWrite,
             ],
-            [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust],
+            [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M5/M7/M8 will append clinic/field/POS/contract permissions as their milestones land.
             [RoleKey.VetClinic] = Array.Empty<string>(),
             [RoleKey.VetField] = Array.Empty<string>(),
@@ -306,6 +337,7 @@ public sealed class DataSeeder
         PermissionKey.UsersManage => "Deactivate or reactivate user accounts.",
         PermissionKey.UsersPermissionsOverride => "Grant or deny individual permissions per user.",
         PermissionKey.SettingsWrite => "Edit environment-level system settings.",
+        PermissionKey.CatalogWrite => "Create, edit, and remove products and services in the catalog.",
         PermissionKey.ContractsActivate => "Promote draft contracts to active.",
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
