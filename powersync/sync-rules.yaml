@@ -12,3 +12,28 @@ bucket_definitions:
     data:
       - SELECT * FROM products WHERE deleted_at IS NULL
       - SELECT * FROM services WHERE deleted_at IS NULL
+
+  # M3 — Doctor scope: each field doctor's assigned customers, their pets, their ledger, and
+  # all of that ledger's entries. PRD §8.6: filtering is purely server-side via these rules; the
+  # client schema does not change. Parameter expansion follows the parent FK chain so a customer
+  # joining the scope brings its pets, ledger, and ledger_entries with it.
+  doctor_scope:
+    parameters: SELECT id AS doctor_id FROM users WHERE id = request.user_id()
+
+    data:
+      - SELECT * FROM customers
+        WHERE assigned_doctor_id = bucket.doctor_id
+          AND deleted_at IS NULL
+      - SELECT pets.* FROM pets
+        JOIN customers ON pets.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND pets.deleted_at IS NULL
+      - SELECT ledgers.* FROM ledgers
+        JOIN customers ON ledgers.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND ledgers.deleted_at IS NULL
+      - SELECT ledger_entries.* FROM ledger_entries
+        JOIN ledgers ON ledger_entries.ledger_id = ledgers.id
+        JOIN customers ON ledgers.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND ledger_entries.deleted_at IS NULL
