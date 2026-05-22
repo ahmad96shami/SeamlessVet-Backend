@@ -1,0 +1,7 @@
+# PowerSync Sync Rules — bucket definitions per docs/TECH_STACK.md "Sample Sync Rules".
+#
+# M0 ships an empty scaffold. Each domain milestone appends the buckets for the tables it owns
+# (M2 reference: products + services; M3+ doctor_scope: assigned customers, pets, ledgers, visits,
+# field inventory, etc.) so the mobile client can pull rows the moment a milestone lands.
+
+bucket_definitions: {}

@@ -1,0 +1,28 @@
+# PowerSync Service config — replication source and sync-bucket storage both target our Postgres
+# (Open Edition path, no MongoDB). The PowerSync container reads this at start and creates the
+# replication slot against the `powersync` publication (see ../db-init/00-publication.sql).
+#
+# JWT validation: the service trusts the API's JWKS URI; tokens are minted by POST /auth/powersync-token.
+
+replication:
+  connections:
+    - type: postgresql
+      uri: !env PS_PG_URI
+      # Resolved from PS_PG_HOST/PS_PG_PORT/PS_PG_DATABASE/PS_PG_USERNAME/PS_PG_PASSWORD in compose.
+
+storage:
+  type: postgresql
+  uri: !env PS_PG_URI
+
+api:
+  tokens:
+    - !env PS_DEV_TOKEN_FALLBACK  # optional dev-only static token; production uses JWKS only.
+
+client_auth:
+  jwks_uri: !env PS_API_JWKS_URI
+  audience: ["powersync"]
+
+sync_rules:
+  path: /config/sync-rules.yaml
+
+port: 8080
