@@ -25,6 +25,9 @@ public static class PermissionKey
     public const string SettingsWrite = "settings.write";
     public const string CatalogWrite = "catalog.write";
 
+    // Customers, pets, ledgers (M3)
+    public const string CustomersWrite = "customers.write";
+
     // Contracts (M8)
     public const string ContractsActivate = "contracts.activate";
 
@@ -42,6 +45,7 @@ public static class PermissionKey
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
         SettingsWrite, CatalogWrite,
+        CustomersWrite,
         ContractsActivate,
         InvoicesRefund, InvoicesVoid,
         InventoryAdjust,

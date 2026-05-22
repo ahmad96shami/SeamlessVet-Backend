@@ -279,6 +279,10 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              ledger_entries,
+              ledgers,
+              pets,
+              customers,
               refresh_tokens,
               registration_requests,
               user_permission_overrides,
@@ -308,13 +312,16 @@ public sealed class DataSeeder
                 PermissionKey.ReportsRead,
                 PermissionKey.SettingsWrite,
                 PermissionKey.CatalogWrite,
+                PermissionKey.CustomersWrite,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M5/M7/M8 will append clinic/field/POS/contract permissions as their milestones land.
-            [RoleKey.VetClinic] = Array.Empty<string>(),
-            [RoleKey.VetField] = Array.Empty<string>(),
-            [RoleKey.VetBoth] = Array.Empty<string>(),
-            [RoleKey.Receptionist] = Array.Empty<string>(),
+            // M3: vet roles get customers.write so field doctors can author customers offline via
+            // /sync/customers; the sync handler additionally restricts assigned_doctor_id writes.
+            [RoleKey.VetClinic] = [PermissionKey.CustomersWrite],
+            [RoleKey.VetField] = [PermissionKey.CustomersWrite],
+            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite],
+            [RoleKey.Receptionist] = [PermissionKey.CustomersWrite],
             [RoleKey.Cashier] = Array.Empty<string>(),
         };
 
@@ -338,6 +345,7 @@ public sealed class DataSeeder
         PermissionKey.UsersPermissionsOverride => "Grant or deny individual permissions per user.",
         PermissionKey.SettingsWrite => "Edit environment-level system settings.",
         PermissionKey.CatalogWrite => "Create, edit, and remove products and services in the catalog.",
+        PermissionKey.CustomersWrite => "Create, edit, and remove customers, pets, and ledger entries.",
         PermissionKey.ContractsActivate => "Promote draft contracts to active.",
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
