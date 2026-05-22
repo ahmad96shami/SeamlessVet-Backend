@@ -59,6 +59,7 @@ builder.Services.AddScoped<UserAdminService>();
 // M2 — catalog + system settings
 builder.Services.AddScoped<VetSystem.API.Catalog.ProductsAdminService>();
 builder.Services.AddScoped<VetSystem.API.Catalog.ServicesAdminService>();
+builder.Services.AddScoped<VetSystem.API.Settings.SystemSettingsAdminService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
