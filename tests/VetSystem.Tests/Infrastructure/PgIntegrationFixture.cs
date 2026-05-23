@@ -23,7 +23,7 @@ public sealed class PgTestScope : IAsyncDisposable
         EnvironmentId = environmentId;
     }
 
-    public static async Task<PgTestScope> CreateAsync()
+    public static async Task<PgTestScope> CreateAsync(string mode = "solo")
     {
         var envId = Guid.CreateVersion7();
         var scope = new PgTestScope(envId);
@@ -33,7 +33,7 @@ public sealed class PgTestScope : IAsyncDisposable
         {
             Id = envId,
             Name = $"Test-{envId:N}".Substring(0, 32),
-            Mode = "solo",
+            Mode = mode,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
