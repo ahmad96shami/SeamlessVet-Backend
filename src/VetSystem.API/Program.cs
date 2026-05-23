@@ -82,6 +82,8 @@ builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, PetsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, LedgersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, LedgerEntriesSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, InventoryMovementsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, StockItemsSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();

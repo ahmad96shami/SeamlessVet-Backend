@@ -68,6 +68,7 @@ public sealed class ExceptionHandlingMiddleware
         NotFoundException => StatusCodes.Status404NotFound,
         ForbiddenException => StatusCodes.Status403Forbidden,
         ConflictException => StatusCodes.Status409Conflict,
+        MethodNotAllowedException => StatusCodes.Status405MethodNotAllowed,
         ValidationException => StatusCodes.Status400BadRequest,
         _ => StatusCodes.Status400BadRequest,
     };

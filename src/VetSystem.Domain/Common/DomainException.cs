@@ -46,6 +46,18 @@ public sealed class ForbiddenException : DomainException
     }
 }
 
+/// <summary>
+/// The HTTP method is not allowed on this resource — e.g. any client write to <c>stock_items</c>,
+/// which is a server-derived materialized balance (SCHEMA "Key invariants" #2). Maps to 405.
+/// </summary>
+public sealed class MethodNotAllowedException : DomainException
+{
+    public MethodNotAllowedException(string code, string message)
+        : base(code, message)
+    {
+    }
+}
+
 public sealed class ValidationException : DomainException
 {
     public ValidationException(IReadOnlyDictionary<string, string[]> fieldErrors)
