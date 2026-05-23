@@ -1,0 +1,527 @@
+using MapsterMapper;
+using Microsoft.EntityFrameworkCore;
+using VetSystem.Application.Common;
+using VetSystem.Application.Financial;
+using VetSystem.Application.Financial.Contracts;
+using VetSystem.Application.Inventory;
+using VetSystem.Application.Inventory.Contracts;
+using VetSystem.Application.Ledgers;
+using VetSystem.Application.Ledgers.Contracts;
+using VetSystem.Domain.Common;
+using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Persistence;
+
+namespace VetSystem.API.Financial;
+
+/// <summary>
+/// Invoice issuance + reads (M7 tasks 3–8, 12). All three issuance flows (POS, field, exam-fee)
+/// funnel through one transactional core so the append-only invariants hold uniformly: an issued
+/// invoice, its items + payments, the <c>sale_deduct</c> movements for product lines, and the
+/// customer ledger posting all commit together or not at all. <c>cost_price</c> is snapshotted from
+/// the product at sale time (SCHEMA invariant #8); a walk-in (null customer) skips the ledger
+/// (PRD §5.4); the ledger entry records the credit/outstanding portion (total minus non-credit
+/// payments). When an invoice is tied to a visit, that visit's unbilled dispensed meds and
+/// procedures are auto-assembled as lines (task 8).
+/// </summary>
+public sealed class InvoicesService
+{
+    private const int MaxPageSize = 200;
+
+    private readonly ApplicationDbContext _db;
+    private readonly ICurrentUserAccessor _currentUser;
+    private readonly IMapper _mapper;
+    private readonly IClock _clock;
+    private readonly IInvoiceNumberValidator _invoiceNumbers;
+    private readonly IInventoryService _inventory;
+    private readonly ILedgerService _ledgers;
+
+    public InvoicesService(
+        ApplicationDbContext db,
+        ICurrentUserAccessor currentUser,
+        IMapper mapper,
+        IClock clock,
+        IInvoiceNumberValidator invoiceNumbers,
+        IInventoryService inventory,
+        ILedgerService ledgers)
+    {
+        _db = db;
+        _currentUser = currentUser;
+        _mapper = mapper;
+        _clock = clock;
+        _invoiceNumbers = invoiceNumbers;
+        _inventory = inventory;
+        _ledgers = ledgers;
+    }
+
+    public async Task<InvoiceResponse> IssuePosAsync(PosInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        var visit = await ResolveVisitAsync(request.VisitId, cancellationToken);
+
+        // POS deducts product lines from the environment's central warehouse.
+        var deduction = await ResolveWarehouseLocationAsync(cancellationToken);
+
+        return await IssueItemizedAsync(
+            invoiceType: InvoiceType.Pos,
+            requestId: request.Id,
+            customerId: request.CustomerId,
+            visit: visit,
+            batchId: null,
+            number: request.Number,
+            invoiceDiscount: request.DiscountAmount,
+            requestItems: request.Items,
+            payments: request.Payments,
+            idempotencyKey: request.IdempotencyKey,
+            deduction: deduction,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<InvoiceResponse> GetAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var exists = await _db.Invoices.AsNoTracking().AnyAsync(i => i.Id == id, cancellationToken);
+        if (!exists)
+        {
+            throw new NotFoundException("invoice", id);
+        }
+
+        return await BuildResponseAsync(id, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<InvoiceResponse>> ListAsync(
+        Guid? customerId, Guid? visitId, string? status, int? skip, int? take, CancellationToken cancellationToken)
+    {
+        var query = _db.Invoices.AsNoTracking();
+        if (customerId is { } cid) query = query.Where(i => i.CustomerId == cid);
+        if (visitId is { } vid) query = query.Where(i => i.VisitId == vid);
+        if (!string.IsNullOrWhiteSpace(status)) query = query.Where(i => i.Status == status);
+
+        var ids = await query
+            .OrderByDescending(i => i.IssuedAt)
+            .Skip(Math.Max(0, skip ?? 0))
+            .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
+            .Select(i => i.Id)
+            .ToListAsync(cancellationToken);
+
+        var results = new List<InvoiceResponse>(ids.Count);
+        foreach (var id in ids)
+        {
+            results.Add(await BuildResponseAsync(id, cancellationToken));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// The shared transactional issuance core (POS + field). Exam-fee issuance has no items and goes
+    /// through <c>IssueExamFeeAsync</c> instead.
+    /// </summary>
+    internal async Task<InvoiceResponse> IssueItemizedAsync(
+        string invoiceType,
+        Guid? requestId,
+        Guid? customerId,
+        Visit? visit,
+        Guid? batchId,
+        string? number,
+        decimal invoiceDiscount,
+        IReadOnlyList<InvoiceLineRequest> requestItems,
+        IReadOnlyList<PaymentRequest> payments,
+        string idempotencyKey,
+        DeductionLocation deduction,
+        CancellationToken cancellationToken)
+    {
+        var (envId, userId) = RequireUser();
+
+        // Row-level idempotency replay (independent of the HTTP Idempotency-Key filter): the same
+        // invoice key returns the originally issued invoice without re-deducting or re-posting.
+        var replayId = await _db.Invoices.AsNoTracking()
+            .Where(i => i.EnvironmentId == envId && i.IdempotencyKey == idempotencyKey)
+            .Select(i => (Guid?)i.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (replayId is { } existing)
+        {
+            return await BuildResponseAsync(existing, cancellationToken);
+        }
+
+        if (customerId is { } cid)
+        {
+            await RequireExistsAsync(_db.Customers.AnyAsync(c => c.Id == cid, cancellationToken), "customer", cid);
+        }
+
+        var normalizedNumber = string.IsNullOrWhiteSpace(number) ? null : number.Trim();
+        if (normalizedNumber is not null)
+        {
+            await _invoiceNumbers.ValidateAsync(normalizedNumber, excludeInvoiceId: null, cancellationToken);
+        }
+
+        if (requestId is { } rid && rid != Guid.Empty
+            && await _db.Invoices.IgnoreQueryFilters().AnyAsync(i => i.Id == rid, cancellationToken))
+        {
+            throw new ConflictException("invoice_id_collision", $"An invoice with id '{rid}' already exists.");
+        }
+
+        var lines = new List<ResolvedLine>();
+        foreach (var item in requestItems)
+        {
+            lines.Add(await ResolveExplicitLineAsync(item, cancellationToken));
+        }
+
+        if (visit is not null)
+        {
+            lines.AddRange(await AssembleVisitLinesAsync(visit, cancellationToken));
+        }
+
+        if (lines.Count == 0)
+        {
+            throw new ConflictException("invoice_has_no_lines",
+                "Nothing to bill: no line items were supplied and the visit had no unbilled charges.");
+        }
+
+        var subtotal = Money(lines.Sum(l => l.LineTotal));
+        var discount = Money(invoiceDiscount);
+        var taxable = subtotal - discount;
+        if (taxable < 0m)
+        {
+            throw new ConflictException("discount_exceeds_subtotal", "The invoice discount exceeds the subtotal.");
+        }
+
+        var settings = await _db.SystemSettings.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.EnvironmentId == envId, cancellationToken);
+        var taxAmount = settings is { TaxEnabled: true }
+            ? Money(taxable * settings.TaxRate / 100m)
+            : 0m;
+        var total = taxable + taxAmount;
+
+        var paymentSum = Money(payments.Sum(p => p.Amount));
+        if (paymentSum > total)
+        {
+            throw new ConflictException("payment_exceeds_total",
+                $"Payments ({paymentSum}) exceed the invoice total ({total}).");
+        }
+
+        var nonCreditPaid = Money(payments.Where(p => p.Method != PaymentMethod.Credit).Sum(p => p.Amount));
+
+        var invoice = new Invoice
+        {
+            Id = requestId ?? Guid.Empty,
+            InvoiceType = invoiceType,
+            CustomerId = customerId,
+            VisitId = visit?.Id,
+            BatchId = batchId,
+            Number = normalizedNumber,
+            Subtotal = subtotal,
+            DiscountAmount = discount,
+            TaxAmount = taxAmount,
+            Total = total,
+            Status = InvoiceStatus.Issued,
+            IssuedBy = userId,
+            IssuedAt = _clock.UtcNow,
+            IdempotencyKey = idempotencyKey,
+        };
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+        _db.Invoices.Add(invoice);
+        await _db.SaveChangesAsync(cancellationToken); // assigns invoice.Id
+
+        foreach (var line in lines)
+        {
+            _db.InvoiceItems.Add(new InvoiceItem
+            {
+                Id = Guid.Empty,
+                InvoiceId = invoice.Id,
+                ProductId = line.ProductId,
+                ServiceId = line.ServiceId,
+                Description = line.Description,
+                Quantity = line.Quantity,
+                UnitPrice = line.UnitPrice,
+                CostPrice = line.CostPrice,
+                DiscountAmount = line.DiscountAmount,
+                LineTotal = line.LineTotal,
+                PrescriptionId = line.PrescriptionId,
+                ProcedureId = line.ProcedureId,
+            });
+        }
+
+        foreach (var payment in payments)
+        {
+            _db.Payments.Add(new Payment
+            {
+                Id = payment.Id ?? Guid.Empty,
+                InvoiceId = invoice.Id,
+                Method = payment.Method,
+                Amount = Money(payment.Amount),
+                PaidAt = _clock.UtcNow,
+            });
+        }
+
+        await _db.SaveChangesAsync(cancellationToken); // assigns item ids (used as movement keys below)
+
+        // Deduct each product line from stock (services don't touch inventory). A negative-stock
+        // rejection throws and rolls the whole issuance back (SCHEMA invariant #2).
+        var productItems = await _db.InvoiceItems
+            .Where(it => it.InvoiceId == invoice.Id && it.ProductId != null)
+            .ToListAsync(cancellationToken);
+        foreach (var item in productItems)
+        {
+            await _inventory.ApplyMovementAsync(
+                new MovementIntent(
+                    Id: null,
+                    MovementType: MovementType.SaleDeduct,
+                    ProductId: item.ProductId!.Value,
+                    Quantity: item.Quantity,
+                    FromLocationType: deduction.LocationType,
+                    FromLocationId: deduction.LocationId,
+                    ToLocationType: null,
+                    ToLocationId: null,
+                    IdempotencyKey: $"sale-{item.Id}",
+                    Reason: $"invoice {invoice.Number ?? invoice.Id.ToString()}",
+                    VisitId: invoice.VisitId,
+                    InvoiceId: invoice.Id),
+                cancellationToken);
+        }
+
+        // Ledger: customer invoices post the outstanding (credit) portion; walk-ins post nothing.
+        if (customerId is { } ledgerCustomer)
+        {
+            await PostInvoiceLedgerEntryAsync(invoice, ledgerCustomer, total - nonCreditPaid, cancellationToken);
+        }
+
+        await tx.CommitAsync(cancellationToken);
+
+        return await BuildResponseAsync(invoice.Id, cancellationToken);
+    }
+
+    private async Task PostInvoiceLedgerEntryAsync(
+        Invoice invoice, Guid customerId, decimal amount, CancellationToken cancellationToken)
+    {
+        var ledgerId = await _db.Ledgers
+            .Where(l => l.CustomerId == customerId)
+            .Select(l => (Guid?)l.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("ledger", customerId);
+
+        var entryType = invoice.InvoiceType == InvoiceType.ExamFee
+            ? LedgerEntryType.ExamFee
+            : LedgerEntryType.Invoice;
+
+        await _ledgers.AppendEntryAsync(
+            new LedgerEntryRequest(
+                Id: null,
+                LedgerId: ledgerId,
+                EntryType: entryType,
+                Amount: amount,
+                InvoiceId: invoice.Id,
+                ReceiptVoucherId: null,
+                Description: invoice.Number is null ? "Invoice" : $"Invoice {invoice.Number}",
+                IdempotencyKey: $"invoice-{invoice.Id}"),
+            cancellationToken);
+    }
+
+    private async Task<ResolvedLine> ResolveExplicitLineAsync(InvoiceLineRequest item, CancellationToken cancellationToken)
+    {
+        decimal unitPrice;
+        decimal costPrice;
+        string? description = item.Description;
+
+        if (item.ProductId is { } productId)
+        {
+            var product = await _db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId, cancellationToken)
+                          ?? throw new NotFoundException("product", productId);
+            unitPrice = item.UnitPrice ?? product.SellingPrice;
+            costPrice = product.PurchasePrice; // snapshot — never recomputed (SCHEMA invariant #8)
+            description ??= product.NameAr;
+        }
+        else
+        {
+            var serviceId = item.ServiceId!.Value;
+            var service = await _db.Services.AsNoTracking().FirstOrDefaultAsync(s => s.Id == serviceId, cancellationToken)
+                          ?? throw new NotFoundException("service", serviceId);
+            unitPrice = item.UnitPrice ?? service.DefaultPrice;
+            costPrice = 0m;
+            description ??= service.NameAr;
+        }
+
+        var lineTotal = Money(item.Quantity * unitPrice - item.DiscountAmount);
+        if (lineTotal < 0m)
+        {
+            throw new ConflictException("line_discount_exceeds_total",
+                "A line discount cannot exceed the line's gross amount.");
+        }
+
+        return new ResolvedLine(
+            item.ProductId, item.ServiceId, description, item.Quantity, unitPrice, costPrice,
+            Money(item.DiscountAmount), lineTotal, PrescriptionId: null, ProcedureId: null);
+    }
+
+    /// <summary>
+    /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c>
+    /// prescription and every billable procedure that no existing invoice line already references.
+    /// Prices come from the catalog now; M8's pricing service swaps in contract-overridden prices.
+    /// </summary>
+    private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(Visit visit, CancellationToken cancellationToken)
+    {
+        var lines = new List<ResolvedLine>();
+
+        var dispensed = await _db.Prescriptions.AsNoTracking()
+            .Where(p => p.VisitId == visit.Id && p.DispenseType == DispenseType.DispensedToOwner)
+            .ToListAsync(cancellationToken);
+
+        if (dispensed.Count > 0)
+        {
+            var rxIds = dispensed.Select(p => p.Id).ToList();
+            var billed = await _db.InvoiceItems.AsNoTracking()
+                .Where(it => it.PrescriptionId != null && rxIds.Contains(it.PrescriptionId!.Value))
+                .Select(it => it.PrescriptionId!.Value)
+                .ToListAsync(cancellationToken);
+            var billedSet = billed.ToHashSet();
+
+            var productIds = dispensed.Select(p => p.ProductId).Distinct().ToList();
+            var products = await _db.Products.AsNoTracking()
+                .Where(p => productIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, cancellationToken);
+
+            foreach (var rx in dispensed.Where(p => !billedSet.Contains(p.Id)))
+            {
+                if (!products.TryGetValue(rx.ProductId, out var product))
+                {
+                    continue;
+                }
+
+                var quantity = rx.Quantity ?? 1m;
+                lines.Add(new ResolvedLine(
+                    ProductId: rx.ProductId,
+                    ServiceId: null,
+                    Description: product.NameAr,
+                    Quantity: quantity,
+                    UnitPrice: product.SellingPrice,
+                    CostPrice: product.PurchasePrice,
+                    DiscountAmount: 0m,
+                    LineTotal: Money(quantity * product.SellingPrice),
+                    PrescriptionId: rx.Id,
+                    ProcedureId: null));
+            }
+        }
+
+        var procedures = await _db.Procedures.AsNoTracking()
+            .Where(pr => pr.VisitId == visit.Id && pr.ServiceId != null)
+            .ToListAsync(cancellationToken);
+
+        if (procedures.Count > 0)
+        {
+            var procIds = procedures.Select(p => p.Id).ToList();
+            var billedProc = await _db.InvoiceItems.AsNoTracking()
+                .Where(it => it.ProcedureId != null && procIds.Contains(it.ProcedureId!.Value))
+                .Select(it => it.ProcedureId!.Value)
+                .ToListAsync(cancellationToken);
+            var billedProcSet = billedProc.ToHashSet();
+
+            foreach (var procedure in procedures.Where(p => !billedProcSet.Contains(p.Id)))
+            {
+                lines.Add(new ResolvedLine(
+                    ProductId: null,
+                    ServiceId: procedure.ServiceId,
+                    Description: null,
+                    Quantity: 1m,
+                    UnitPrice: procedure.Price,
+                    CostPrice: 0m,
+                    DiscountAmount: 0m,
+                    LineTotal: Money(procedure.Price),
+                    PrescriptionId: null,
+                    ProcedureId: procedure.Id));
+            }
+        }
+
+        return lines;
+    }
+
+    private async Task<InvoiceResponse> BuildResponseAsync(Guid invoiceId, CancellationToken cancellationToken)
+    {
+        var invoice = await _db.Invoices.AsNoTracking().FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken)
+                      ?? throw new NotFoundException("invoice", invoiceId);
+
+        var items = await _db.InvoiceItems.AsNoTracking()
+            .Where(it => it.InvoiceId == invoiceId)
+            .OrderBy(it => it.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        var payments = await _db.Payments.AsNoTracking()
+            .Where(p => p.InvoiceId == invoiceId)
+            .OrderBy(p => p.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        return new InvoiceResponse(
+            invoice.Id,
+            invoice.InvoiceType,
+            invoice.CustomerId,
+            invoice.VisitId,
+            invoice.BatchId,
+            invoice.Number,
+            invoice.Subtotal,
+            invoice.DiscountAmount,
+            invoice.TaxAmount,
+            invoice.Total,
+            invoice.Status,
+            invoice.IssuedBy,
+            invoice.IssuedAt,
+            invoice.VoidOfInvoiceId,
+            items.Select(_mapper.Map<InvoiceItemResponse>).ToList(),
+            payments.Select(_mapper.Map<PaymentResponse>).ToList(),
+            invoice.CreatedAt,
+            invoice.UpdatedAt);
+    }
+
+    private async Task<Visit?> ResolveVisitAsync(Guid? visitId, CancellationToken cancellationToken)
+    {
+        if (visitId is not { } id)
+        {
+            return null;
+        }
+
+        return await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
+               ?? throw new NotFoundException("visit", id);
+    }
+
+    private async Task<DeductionLocation> ResolveWarehouseLocationAsync(CancellationToken cancellationToken)
+    {
+        var warehouseId = await _db.Warehouses
+            .Select(w => (Guid?)w.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new ConflictException("no_warehouse",
+                "No warehouse exists in this environment to deduct sold products from.");
+
+        return new DeductionLocation(StockLocation.Warehouse, warehouseId);
+    }
+
+    private (Guid EnvironmentId, Guid UserId) RequireUser()
+    {
+        if (_currentUser.EnvironmentId is not { } envId || _currentUser.UserId is not { } userId)
+        {
+            throw new ForbiddenException("unauthenticated", "Authentication required.");
+        }
+
+        return (envId, userId);
+    }
+
+    private static async Task RequireExistsAsync(Task<bool> existsQuery, string entity, Guid id)
+    {
+        if (!await existsQuery)
+        {
+            throw new NotFoundException(entity, id);
+        }
+    }
+
+    private static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
+
+    internal sealed record DeductionLocation(string LocationType, Guid LocationId);
+
+    private sealed record ResolvedLine(
+        Guid? ProductId,
+        Guid? ServiceId,
+        string? Description,
+        decimal Quantity,
+        decimal UnitPrice,
+        decimal CostPrice,
+        decimal DiscountAmount,
+        decimal LineTotal,
+        Guid? PrescriptionId,
+        Guid? ProcedureId);
+}

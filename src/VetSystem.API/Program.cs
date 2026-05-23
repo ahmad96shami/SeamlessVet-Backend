@@ -101,6 +101,7 @@ builder.Services.AddScoped<VetSystem.API.Appointments.AppointmentsService>();
 // M7 — financial (POS, invoices, receipt vouchers)
 builder.Services.AddScoped<VetSystem.Application.Financial.IInvoiceNumberValidator,
     VetSystem.Infrastructure.Financial.InvoiceNumberValidator>();
+builder.Services.AddScoped<VetSystem.API.Financial.InvoicesService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
