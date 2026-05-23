@@ -111,3 +111,42 @@ bucket_definitions:
       - SELECT appointments.* FROM appointments
         WHERE appointments.doctor_id = bucket.doctor_id
           AND appointments.deleted_at IS NULL
+
+      # M7 — financial: invoices for the doctor's assigned customers (and any field invoice tied to
+      # one of the doctor's own visits), their line items + payments by the invoice FK chain, and the
+      # customers' receipt vouchers. Filtered through the customer assigned_doctor_id / visit doctor_id
+      # chains, mirroring the ledger scope. The device issues these through
+      # /sync/{invoices,invoice_items,payments,receipt_vouchers}, which are append-only and
+      # server-authoritative — financial conflicts always defer to the server (SCHEMA invariant #5).
+      - SELECT invoices.* FROM invoices
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND invoices.deleted_at IS NULL
+      - SELECT invoices.* FROM invoices
+        JOIN visits ON invoices.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND invoices.deleted_at IS NULL
+      - SELECT invoice_items.* FROM invoice_items
+        JOIN invoices ON invoice_items.invoice_id = invoices.id
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND invoice_items.deleted_at IS NULL
+      - SELECT invoice_items.* FROM invoice_items
+        JOIN invoices ON invoice_items.invoice_id = invoices.id
+        JOIN visits ON invoices.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND invoice_items.deleted_at IS NULL
+      - SELECT payments.* FROM payments
+        JOIN invoices ON payments.invoice_id = invoices.id
+        JOIN customers ON invoices.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND payments.deleted_at IS NULL
+      - SELECT payments.* FROM payments
+        JOIN invoices ON payments.invoice_id = invoices.id
+        JOIN visits ON invoices.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND payments.deleted_at IS NULL
+      - SELECT receipt_vouchers.* FROM receipt_vouchers
+        JOIN customers ON receipt_vouchers.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND receipt_vouchers.deleted_at IS NULL
