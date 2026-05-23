@@ -5,6 +5,7 @@ using VetSystem.Application.Entitlements;
 using VetSystem.Application.Entitlements.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Domain.Events;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Entitlements;
@@ -27,6 +28,7 @@ public sealed class EntitlementSettlementService
     private readonly ISettlementLockGuard _lock;
     private readonly IClock _clock;
     private readonly IMapper _mapper;
+    private readonly IDomainEventPublisher _events;
 
     public EntitlementSettlementService(
         ApplicationDbContext db,
@@ -34,7 +36,8 @@ public sealed class EntitlementSettlementService
         IEntitlementService entitlements,
         ISettlementLockGuard settlementLock,
         IClock clock,
-        IMapper mapper)
+        IMapper mapper,
+        IDomainEventPublisher events)
     {
         _db = db;
         _currentUser = currentUser;
@@ -42,6 +45,7 @@ public sealed class EntitlementSettlementService
         _lock = settlementLock;
         _clock = clock;
         _mapper = mapper;
+        _events = events;
     }
 
     /// <summary>
@@ -122,6 +126,12 @@ public sealed class EntitlementSettlementService
         entitlement.ApprovedBy = userId;
         entitlement.ApprovedAt = _clock.UtcNow;
         await _db.SaveChangesAsync(cancellationToken);
+
+        // Notify the entitled doctor that their accrual cleared the settlement lock (M11 task 13).
+        await _events.PublishAsync(
+            new EntitlementApprovedEvent(
+                entitlement.EnvironmentId, entitlement.Id, entitlement.DoctorId, entitlement.ComputedAmount, userId),
+            cancellationToken);
 
         return _mapper.Map<DoctorEntitlementResponse>(entitlement);
     }

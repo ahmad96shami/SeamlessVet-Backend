@@ -10,6 +10,8 @@
 
 using System.Text;
 using FluentValidation;
+using Hangfire;
+using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using NSwag;
@@ -69,9 +71,11 @@ builder.Services.AddScoped<VetSystem.API.Pets.PetsService>();
 builder.Services.AddScoped<VetSystem.Application.Ledgers.ILedgerService,
     VetSystem.Infrastructure.Ledgers.LedgerService>();
 
-// M4 — inventory (warehouse + field), delta-only append-only movements
+// M4 — inventory (warehouse + field), delta-only append-only movements.
+// M11 — the publisher now fans events out to IDomainEventHandler<T>s (notification handlers) in a
+// fresh scope per publish; handler registrations live with the SignalR/notification wiring below.
 builder.Services.AddSingleton<IDomainEventPublisher,
-    VetSystem.Infrastructure.Messaging.InMemoryDomainEventPublisher>();
+    VetSystem.Infrastructure.Messaging.DispatchingDomainEventPublisher>();
 builder.Services.AddSingleton<VetSystem.Application.Inventory.IMovementTranslator,
     VetSystem.Application.Inventory.MovementTranslator>();
 builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryService,
@@ -147,6 +151,31 @@ builder.Services.AddScoped<VetSystem.Application.Partnership.IProfitDistribution
 builder.Services.AddScoped<VetSystem.API.Partnership.PartnersService>();
 builder.Services.AddScoped<VetSystem.API.Partnership.PartnershipSharesService>();
 
+// M11 — SignalR realtime + notification dispatch. The dispatcher persists a notifications row per
+// recipient and pushes over the hub; recipient resolution + the in-app feed are scoped DB reads.
+// Domain-event handlers (which turn negative-stock/account-ready/entitlement-approved into
+// notifications) and the Hangfire jobs are registered further below.
+builder.Services.AddSignalR();
+builder.Services.AddScoped<VetSystem.Application.Notifications.INotificationDispatcher,
+    VetSystem.API.Notifications.NotificationDispatcher>();
+builder.Services.AddScoped<VetSystem.API.Notifications.NotificationRecipientResolver>();
+builder.Services.AddScoped<VetSystem.API.Notifications.NotificationsService>();
+
+// Domain-event → notification handlers (dispatched in a fresh scope by DispatchingDomainEventPublisher).
+builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.NegativeStockAttemptedEvent>,
+    VetSystem.API.Notifications.Handlers.NegativeStockAttemptedHandler>();
+builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.AccountReadyForSettlementEvent>,
+    VetSystem.API.Notifications.Handlers.AccountReadyForSettlementHandler>();
+builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.EntitlementApprovedEvent>,
+    VetSystem.API.Notifications.Handlers.EntitlementApprovedHandler>();
+
+// Hangfire job classes — registered as services always so the recurring registration (real runs) and
+// the integration tests (forced clock, invoked directly) both resolve them from DI.
+builder.Services.AddScoped<VetSystem.API.Jobs.VaccinationRemindersJob>();
+builder.Services.AddScoped<VetSystem.API.Jobs.LowStockAlertsJob>();
+builder.Services.AddScoped<VetSystem.API.Jobs.ExpirationWarningsJob>();
+builder.Services.AddScoped<VetSystem.API.Jobs.ScheduledReportDeliveryJob>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
@@ -174,6 +203,25 @@ builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();
 
+// M11 — Hangfire (PostgreSQL storage, single in-process worker per TECH_STACK). Disabled under the
+// "Test" environment so integration tests never touch Hangfire's global JobStorage/schema; the job
+// classes are still registered as plain services (below) so tests can drive them directly with a
+// forced clock. The dashboard is mounted after build, gated to admins.
+var hangfireEnabled = !builder.Environment.IsEnvironment("Test");
+if (hangfireEnabled)
+{
+    var hangfireConnection = builder.Configuration.GetConnectionString(
+        VetSystem.Infrastructure.DependencyInjection.PostgresConnectionStringName);
+
+    builder.Services.AddHangfire(cfg => cfg
+        .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+        .UseSimpleAssemblyNameTypeSerializer()
+        .UseRecommendedSerializerSettings()
+        .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(hangfireConnection)));
+
+    builder.Services.AddHangfireServer(o => o.WorkerCount = 1);
+}
+
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddMappingAndValidators(typeof(Program).Assembly);
@@ -196,6 +244,23 @@ builder.Services
             ClockSkew = TimeSpan.FromSeconds(30),
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt.SecretKey)),
+        };
+
+        // SignalR clients send the access token on the query string — the WebSocket/SSE handshake
+        // can't carry an Authorization header. Honor it for hub requests only (M11 task 5).
+        options.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                var accessToken = context.Request.Query["access_token"];
+                if (!string.IsNullOrEmpty(accessToken)
+                    && context.HttpContext.Request.Path.StartsWithSegments("/hubs/notifications"))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            },
         };
     });
 
@@ -239,6 +304,26 @@ app.UseSwaggerUi(settings =>
 });
 
 app.MapEndpointModules();
+app.MapHub<VetSystem.API.Notifications.NotificationsHub>("/hubs/notifications");
+
+if (hangfireEnabled)
+{
+    app.UseHangfireDashboard("/hangfire", new DashboardOptions
+    {
+        Authorization = [new VetSystem.API.Jobs.AdminOnlyDashboardAuthorizationFilter()],
+    });
+
+    // Recurring scans (UTC cron). The alert jobs run each morning; report delivery is weekly. Jobs
+    // iterate every environment internally, so one schedule covers the whole instance.
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.VaccinationRemindersJob>(
+        "vaccination-reminders", j => j.RunAsync(CancellationToken.None), "0 7 * * *");
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.LowStockAlertsJob>(
+        "low-stock-alerts", j => j.RunAsync(CancellationToken.None), "0 7 * * *");
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.ExpirationWarningsJob>(
+        "expiration-warnings", j => j.RunAsync(CancellationToken.None), "0 7 * * *");
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.ScheduledReportDeliveryJob>(
+        "scheduled-report-delivery", j => j.RunAsync(CancellationToken.None), "0 7 * * 1");
+}
 
 if (args.Contains("--seed") || args.Contains("--force-seed"))
 {

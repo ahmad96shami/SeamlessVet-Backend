@@ -5,6 +5,7 @@ using VetSystem.Application.Ledgers;
 using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Domain.Events;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.Infrastructure.Ledgers;
@@ -21,12 +22,18 @@ public sealed class LedgerService : ILedgerService
     private readonly ApplicationDbContext _db;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IMapper _mapper;
+    private readonly IDomainEventPublisher _events;
 
-    public LedgerService(ApplicationDbContext db, ICurrentUserAccessor currentUser, IMapper mapper)
+    public LedgerService(
+        ApplicationDbContext db,
+        ICurrentUserAccessor currentUser,
+        IMapper mapper,
+        IDomainEventPublisher events)
     {
         _db = db;
         _currentUser = currentUser;
         _mapper = mapper;
+        _events = events;
     }
 
     public async Task<LedgerEntryResponse> AppendEntryAsync(
@@ -60,6 +67,7 @@ public sealed class LedgerService : ILedgerService
                 "Cannot append to a closed ledger. Re-open the account or create an adjustment entry.");
         }
 
+        var previousBalance = ledger.Balance;
         var newBalance = ledger.Balance + request.Amount;
 
         var entry = new LedgerEntry
@@ -93,6 +101,16 @@ public sealed class LedgerService : ILedgerService
                     e => e.EnvironmentId == envId && e.IdempotencyKey == request.IdempotencyKey,
                     cancellationToken);
             return _mapper.Map<LedgerEntryResponse>(winning);
+        }
+
+        // The account just transitioned from owing (> 0) to fully settled (0): the last open invoice
+        // is paid, so the account is ready to close and release entitlements (M11 task 12). Published
+        // after the commit so handlers observe persisted state; a handler failure won't undo the entry.
+        if (previousBalance > 0m && newBalance == 0m)
+        {
+            await _events.PublishAsync(
+                new AccountReadyForSettlementEvent(ledger.EnvironmentId, ledger.CustomerId, ledger.Id, previousBalance),
+                cancellationToken);
         }
 
         return _mapper.Map<LedgerEntryResponse>(entry);
