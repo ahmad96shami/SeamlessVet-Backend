@@ -2,6 +2,7 @@ using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
 using VetSystem.Application.Contracts.Contracts;
+using VetSystem.Application.Entitlements;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
 using VetSystem.Infrastructure.Persistence;
@@ -14,6 +15,10 @@ namespace VetSystem.API.Contracts;
 /// operation (PRD §7), so the endpoints are gated on <c>contracts.activate</c> and writes never reach
 /// the device through <c>/sync</c>. The values written here are what M9 reads to compute the
 /// responsible doctor's entitlement.
+///
+/// <para>M9: closing a batch (status → <c>closed</c>) is the cycle-finalization trigger that computes
+/// the responsible doctor's entitlement into a <c>pending</c> row (PRD §7.8 "Calculated, awaiting
+/// account closure"). It stays locked until the customer account is closed in full (settlement lock).</para>
 /// </summary>
 public sealed class BatchesService
 {
@@ -21,12 +26,18 @@ public sealed class BatchesService
 
     private readonly ApplicationDbContext _db;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IEntitlementService _entitlements;
     private readonly IMapper _mapper;
 
-    public BatchesService(ApplicationDbContext db, ICurrentUserAccessor currentUser, IMapper mapper)
+    public BatchesService(
+        ApplicationDbContext db,
+        ICurrentUserAccessor currentUser,
+        IEntitlementService entitlements,
+        IMapper mapper)
     {
         _db = db;
         _currentUser = currentUser;
+        _entitlements = entitlements;
         _mapper = mapper;
     }
 
@@ -142,9 +153,26 @@ public sealed class BatchesService
         if (request.EntitlementSystem is not null) batch.EntitlementSystem = request.EntitlementSystem;
         if (request.DoctorSharePercent.HasValue) batch.DoctorSharePercent = request.DoctorSharePercent;
         if (request.DoctorShareCeiling.HasValue) batch.DoctorShareCeiling = request.DoctorShareCeiling;
-        if (request.Status is not null) batch.Status = request.Status;
 
-        await _db.SaveChangesAsync(cancellationToken);
+        var wasClosed = batch.Status == BatchStatus.Closed;
+        if (request.Status is not null) batch.Status = request.Status;
+        var nowClosing = !wasClosed && batch.Status == BatchStatus.Closed;
+
+        // Closing the cycle finalizes its accounting: compute the responsible doctor's entitlement
+        // into a pending row, atomically with the status flip (PRD §7.8). It remains locked until the
+        // customer account closes in full. Idempotent — re-closing/recompute refreshes the pending row.
+        if (nowClosing)
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken);
+            await _entitlements.ComputeForBatchAsync(batch.Id, cancellationToken);
+            await tx.CommitAsync(cancellationToken);
+        }
+        else
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
         return _mapper.Map<BatchResponse>(batch);
     }
 

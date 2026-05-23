@@ -113,6 +113,31 @@ builder.Services.AddScoped<VetSystem.API.Contracts.ContractsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractMedicationPricesService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
 
+// M9 — doctor entitlements & settlement lock. The fee-model + System A/B calculators and the toggle
+// resolver are pure (no state), registered as singletons; the four IExamFeeCalculator impls are
+// enumerated by the factory to dispatch on supervision_fee_model.
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
+    VetSystem.Application.Entitlements.FixedAmountExamFeeCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
+    VetSystem.Application.Entitlements.PercentOfInvoiceExamFeeCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
+    VetSystem.Application.Entitlements.PerBirdExamFeeCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
+    VetSystem.Application.Entitlements.PerBatchFixedExamFeeCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculatorFactory,
+    VetSystem.Application.Entitlements.ExamFeeCalculatorFactory>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.IEntitlementToggleResolver,
+    VetSystem.Application.Entitlements.EntitlementToggleResolver>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISystemADrugProfitCalculator,
+    VetSystem.Application.Entitlements.SystemADrugProfitCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISystemBDirectFeeCalculator,
+    VetSystem.Application.Entitlements.SystemBDirectFeeCalculator>();
+builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISettlementLockGuard,
+    VetSystem.Application.Entitlements.SettlementLockGuard>();
+builder.Services.AddScoped<VetSystem.Application.Entitlements.IEntitlementService,
+    VetSystem.Infrastructure.Entitlements.EntitlementService>();
+builder.Services.AddScoped<VetSystem.API.Entitlements.EntitlementSettlementService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
@@ -135,6 +160,7 @@ builder.Services.AddScoped<ISyncTableHandler, ReceiptVouchersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractMedicationPricesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, BatchesSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, DoctorEntitlementsSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();

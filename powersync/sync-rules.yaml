@@ -167,3 +167,11 @@ bucket_definitions:
       - SELECT batches.* FROM batches
         WHERE batches.responsible_doctor_id = bucket.doctor_id
           AND batches.deleted_at IS NULL
+
+      # M9 — doctor entitlements the doctor has accrued (batch supervision or per-visit). Server-
+      # authoritative: computed by the settlement workflow and approved/paid via the
+      # /doctor-entitlements endpoints; the device pulls them read-only (/sync/doctor_entitlements
+      # rejects every client write). Filtered on doctor_id like visits/batches.
+      - SELECT doctor_entitlements.* FROM doctor_entitlements
+        WHERE doctor_entitlements.doctor_id = bucket.doctor_id
+          AND doctor_entitlements.deleted_at IS NULL

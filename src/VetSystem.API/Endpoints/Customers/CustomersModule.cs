@@ -1,4 +1,5 @@
 using VetSystem.API.Customers;
+using VetSystem.API.Entitlements;
 using VetSystem.API.Filters;
 using VetSystem.Application.Customers.Contracts;
 using VetSystem.Application.Ledgers;
@@ -47,6 +48,13 @@ public sealed class CustomersModule : IEndpointModule
         // M3 task 8 — full ledger statement, ready for WhatsApp/email/print on the client.
         group.MapGet("/{id:guid}/statement", Statement)
             .WithName("Customers_Statement");
+
+        // M9 task 9 — close the account (zero-balance only) and trigger the entitlement settlement
+        // workflow (PRD §7.7). Payout authority, so gated on entitlements.approve.
+        group.MapPost("/{id:guid}/close-account", CloseAccount)
+            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .AddEndpointFilter(new IdempotencyKeyFilter("close_account"))
+            .WithName("Customers_CloseAccount");
     }
 
     private static async Task<IResult> List(
@@ -102,5 +110,14 @@ public sealed class CustomersModule : IEndpointModule
     {
         var statement = await ledgers.GetStatementAsync(id, from, to, cancellationToken);
         return TypedResults.Ok(statement);
+    }
+
+    private static async Task<IResult> CloseAccount(
+        Guid id,
+        EntitlementSettlementService settlement,
+        CancellationToken cancellationToken)
+    {
+        var result = await settlement.CloseCustomerAccountAsync(id, cancellationToken);
+        return TypedResults.Ok(result);
     }
 }
