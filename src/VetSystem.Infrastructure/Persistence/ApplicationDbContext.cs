@@ -65,6 +65,8 @@ public sealed class ApplicationDbContext : DbContext
 
     public DbSet<DoctorEntitlement> DoctorEntitlements => Set<DoctorEntitlement>();
 
+    public DbSet<Notification> Notifications => Set<Notification>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.
