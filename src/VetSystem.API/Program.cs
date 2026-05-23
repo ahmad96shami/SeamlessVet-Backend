@@ -82,6 +82,8 @@ builder.Services.AddScoped<VetSystem.API.Inventory.InventoryAdminService>();
 builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberValidator,
     VetSystem.Infrastructure.Visits.VisitNumberValidator>();
 builder.Services.AddScoped<VetSystem.API.Visits.VisitsService>();
+builder.Services.AddScoped<VetSystem.API.Procedures.ProceduresService>();
+builder.Services.AddScoped<VetSystem.API.Prescriptions.PrescriptionsService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
