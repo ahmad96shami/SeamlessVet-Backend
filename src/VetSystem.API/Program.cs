@@ -119,6 +119,10 @@ builder.Services.AddScoped<ISyncTableHandler, DailyFollowUpsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, VaccinationsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, AttachmentsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, AppointmentsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, InvoicesSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, InvoiceItemsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, PaymentsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, ReceiptVouchersSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();
