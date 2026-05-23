@@ -303,6 +303,10 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              payments,
+              invoice_items,
+              receipt_vouchers,
+              invoices,
               attachments,
               vaccinations,
               daily_follow_ups,
@@ -341,6 +345,7 @@ public sealed class DataSeeder
             [RoleKey.Admin] = PermissionKey.All, // admin gets every catalog permission
             [RoleKey.Accountant] =
             [
+                PermissionKey.InvoicesWrite,
                 PermissionKey.InvoicesRefund,
                 PermissionKey.InvoicesVoid,
                 PermissionKey.ReportsRead,
@@ -349,18 +354,19 @@ public sealed class DataSeeder
                 PermissionKey.CustomersWrite,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
-            // M7/M8 will append POS/contract permissions as their milestones land.
             // M3: vet roles get customers.write so field doctors can author customers offline via
             // /sync/customers; the sync handler additionally restricts assigned_doctor_id writes.
             // M5: clinical roles get medical.write for the dedicated visit/medical endpoints; the
             // receptionist gets it too since they open visits at reception (PRD §3).
             // M6: clinical roles + the receptionist also get appointments.write so the front desk
             // and doctors can book/reschedule from either client.
+            // M7: field-capable vets get invoices.write so they can issue field/exam-fee invoices and
+            // receipt vouchers on-site (PRD §6.2). Clinic POS issuance is the cashier's job.
             [RoleKey.VetClinic] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
-            [RoleKey.VetField] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
-            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
+            [RoleKey.VetField] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite],
+            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite],
             [RoleKey.Receptionist] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
-            [RoleKey.Cashier] = Array.Empty<string>(),
+            [RoleKey.Cashier] = [PermissionKey.InvoicesWrite],
         };
 
     private static string DisplayNameFor(string key) => key switch
@@ -387,6 +393,7 @@ public sealed class DataSeeder
         PermissionKey.MedicalWrite => "Create and edit visits, procedures, prescriptions, follow-ups, vaccinations, and attachments.",
         PermissionKey.AppointmentsWrite => "Create, reschedule, and resolve (attend/cancel/no-show) appointments.",
         PermissionKey.ContractsActivate => "Promote draft contracts to active.",
+        PermissionKey.InvoicesWrite => "Issue POS, field, and exam-fee invoices and receipt vouchers.",
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
         PermissionKey.InventoryAdjust => "Apply inventory adjustments.",

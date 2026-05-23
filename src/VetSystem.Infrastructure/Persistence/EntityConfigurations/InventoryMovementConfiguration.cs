@@ -53,10 +53,17 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
             .OnDelete(DeleteBehavior.Restrict);
 
         // M5 wires the visit_id FK now that `visits` exists — a prescription administered in-clinic
-        // posts a sale_deduct movement tagged with its visit. invoice_id stays unconstrained until M7.
+        // posts a sale_deduct movement tagged with its visit.
         builder.HasOne<Visit>()
             .WithMany()
             .HasForeignKey(m => m.VisitId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M7 wires the invoice_id FK — a sale_deduct posted when an invoice is issued tags the
+        // movement with its invoice, so reports can reconcile stock movement against sales.
+        builder.HasOne<Invoice>()
+            .WithMany()
+            .HasForeignKey(m => m.InvoiceId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

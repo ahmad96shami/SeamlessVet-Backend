@@ -52,6 +52,11 @@ public sealed class ApplicationDbContext : DbContext
 
     public DbSet<Appointment> Appointments => Set<Appointment>();
 
+    public DbSet<Invoice> Invoices => Set<Invoice>();
+    public DbSet<InvoiceItem> InvoiceItems => Set<InvoiceItem>();
+    public DbSet<Payment> Payments => Set<Payment>();
+    public DbSet<ReceiptVoucher> ReceiptVouchers => Set<ReceiptVoucher>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.

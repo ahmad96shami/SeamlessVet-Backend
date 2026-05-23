@@ -38,8 +38,17 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
         builder.HasIndex(e => new { e.LedgerId, e.CreatedAt })
             .HasDatabaseName("ix_ledger_entries_ledger");
 
-        // Note: invoice_id / receipt_voucher_id FK targets are added by M7 when those tables
-        // come online — the columns exist here so the polymorphic source can be set as soon
-        // as the M7 endpoints start posting entries.
+        // M7 — the polymorphic source FK targets now exist. An invoice/exam-fee entry points at the
+        // invoice; a receipt-voucher entry points at the voucher. Both stay nullable (an adjustment
+        // entry has neither).
+        builder.HasOne<Invoice>()
+            .WithMany()
+            .HasForeignKey(e => e.InvoiceId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<ReceiptVoucher>()
+            .WithMany()
+            .HasForeignKey(e => e.ReceiptVoucherId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

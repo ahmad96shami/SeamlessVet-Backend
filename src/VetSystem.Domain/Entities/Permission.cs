@@ -38,6 +38,7 @@ public static class PermissionKey
     public const string ContractsActivate = "contracts.activate";
 
     // Financial (M7)
+    public const string InvoicesWrite = "invoices.write";
     public const string InvoicesRefund = "invoices.refund";
     public const string InvoicesVoid = "invoices.void";
 
@@ -55,7 +56,7 @@ public static class PermissionKey
         MedicalWrite,
         AppointmentsWrite,
         ContractsActivate,
-        InvoicesRefund, InvoicesVoid,
+        InvoicesWrite, InvoicesRefund, InvoicesVoid,
         InventoryAdjust,
         ReportsRead,
     ];
