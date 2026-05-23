@@ -78,6 +78,10 @@ builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryScanService
     VetSystem.Infrastructure.Inventory.InventoryScanService>();
 builder.Services.AddScoped<VetSystem.API.Inventory.InventoryAdminService>();
 
+// M5 — visits & medical records
+builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberValidator,
+    VetSystem.Infrastructure.Visits.VisitNumberValidator>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
