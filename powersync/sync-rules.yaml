@@ -37,3 +37,26 @@ bucket_definitions:
         JOIN customers ON ledgers.customer_id = customers.id
         WHERE customers.assigned_doctor_id = bucket.doctor_id
           AND ledger_entries.deleted_at IS NULL
+
+      # M4 — field inventory scope: the doctor's own field inventory ("moving warehouse"), its
+      # materialized stock balances, and every movement that touches it. stock_items and
+      # inventory_movements join field_inventories on location_id so only the doctor's 'field'
+      # location reaches the device (PRD §8.6). Warehouse stock/movements stay server-only.
+      - SELECT * FROM field_inventories
+        WHERE doctor_id = bucket.doctor_id
+          AND deleted_at IS NULL
+      - SELECT stock_items.* FROM stock_items
+        JOIN field_inventories ON stock_items.location_id = field_inventories.id
+        WHERE stock_items.location_type = 'field'
+          AND field_inventories.doctor_id = bucket.doctor_id
+          AND stock_items.deleted_at IS NULL
+      - SELECT inventory_movements.* FROM inventory_movements
+        JOIN field_inventories ON inventory_movements.from_location_id = field_inventories.id
+        WHERE inventory_movements.from_location_type = 'field'
+          AND field_inventories.doctor_id = bucket.doctor_id
+          AND inventory_movements.deleted_at IS NULL
+      - SELECT inventory_movements.* FROM inventory_movements
+        JOIN field_inventories ON inventory_movements.to_location_id = field_inventories.id
+        WHERE inventory_movements.to_location_type = 'field'
+          AND field_inventories.doctor_id = bucket.doctor_id
+          AND inventory_movements.deleted_at IS NULL
