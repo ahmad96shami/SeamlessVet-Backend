@@ -84,6 +84,8 @@ builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberValidator,
 builder.Services.AddScoped<VetSystem.API.Visits.VisitsService>();
 builder.Services.AddScoped<VetSystem.API.Procedures.ProceduresService>();
 builder.Services.AddScoped<VetSystem.API.Prescriptions.PrescriptionsService>();
+builder.Services.AddScoped<VetSystem.API.DailyFollowUps.DailyFollowUpsService>();
+builder.Services.AddScoped<VetSystem.API.Vaccinations.VaccinationsService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
