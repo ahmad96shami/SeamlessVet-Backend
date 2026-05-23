@@ -104,3 +104,30 @@ public sealed record UnloadFieldRequest(
     Guid? WarehouseId,
     string IdempotencyKey,
     string? Reason = null);
+
+// ---- Scan results (data only; M11 turns these into alerts via Hangfire) ----
+
+/// <summary>
+/// A (location, product) stock item at or below its low-stock threshold. Threshold =
+/// <c>reorder_point × (1 + system_settings.low_stock_threshold_pct/100)</c>.
+/// </summary>
+public sealed record LowStockItem(
+    Guid ProductId,
+    string ProductNameAr,
+    string? UnitOfMeasure,
+    string LocationType,
+    Guid LocationId,
+    decimal Quantity,
+    decimal ReorderPoint,
+    decimal ThresholdQuantity);
+
+/// <summary>
+/// A product on hand whose expiration falls within <c>system_settings.expiration_warning_days</c>
+/// (<see cref="DaysUntilExpiry"/> is negative if already expired).
+/// </summary>
+public sealed record ExpiringProduct(
+    Guid ProductId,
+    string ProductNameAr,
+    DateOnly ExpirationDate,
+    int DaysUntilExpiry,
+    decimal QuantityOnHand);

@@ -74,6 +74,8 @@ builder.Services.AddSingleton<VetSystem.Application.Inventory.IMovementTranslato
     VetSystem.Application.Inventory.MovementTranslator>();
 builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryService,
     VetSystem.Infrastructure.Inventory.InventoryService>();
+builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryScanService,
+    VetSystem.Infrastructure.Inventory.InventoryScanService>();
 builder.Services.AddScoped<VetSystem.API.Inventory.InventoryAdminService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
