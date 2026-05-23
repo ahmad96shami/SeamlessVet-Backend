@@ -133,4 +133,38 @@ internal static class SyncBody
             _ => throw new ConflictException("invalid_payload", $"'{field}' must be a date (YYYY-MM-DD) or null."),
         };
     }
+
+    public static int? OptionalInt(JsonElement body, string field)
+    {
+        if (!body.TryGetProperty(field, out var element))
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.Number when element.TryGetInt32(out var i) => i,
+            _ => throw new ConflictException("invalid_payload", $"'{field}' must be an integer or null."),
+        };
+    }
+
+    public static DateTimeOffset? OptionalDateTime(JsonElement body, string field)
+    {
+        if (!body.TryGetProperty(field, out var element))
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.String when DateTimeOffset.TryParse(
+                element.GetString(), null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var dt) => dt,
+            _ => throw new ConflictException("invalid_payload", $"'{field}' must be an ISO-8601 timestamp or null."),
+        };
+    }
+
+    public static string RequireString(JsonElement body, string field, IReadOnlyCollection<string> allowed)
+        => RequireString(body, field, allowed, field);
 }
