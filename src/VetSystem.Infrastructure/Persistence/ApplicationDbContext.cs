@@ -50,6 +50,8 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<Vaccination> Vaccinations => Set<Vaccination>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
 
+    public DbSet<Appointment> Appointments => Set<Appointment>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.
