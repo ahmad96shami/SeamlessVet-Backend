@@ -93,6 +93,11 @@ builder.Services.AddSingleton<VetSystem.Application.Storage.ISignedUrlService,
 builder.Services.AddScoped<VetSystem.API.Attachments.AttachmentsService>();
 builder.Services.AddScoped<VetSystem.API.Pets.PetTimelineService>();
 
+// M6 — appointments (scheduling + conflict detection)
+builder.Services.AddScoped<VetSystem.Application.Appointments.IAppointmentService,
+    VetSystem.Infrastructure.Appointments.AppointmentService>();
+builder.Services.AddScoped<VetSystem.API.Appointments.AppointmentsService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
@@ -107,6 +112,7 @@ builder.Services.AddScoped<ISyncTableHandler, PrescriptionsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, DailyFollowUpsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, VaccinationsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, AttachmentsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, AppointmentsSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();

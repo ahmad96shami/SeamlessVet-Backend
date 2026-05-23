@@ -104,3 +104,10 @@ bucket_definitions:
         JOIN customers ON pets.customer_id = customers.id
         WHERE customers.assigned_doctor_id = bucket.doctor_id
           AND vaccinations.deleted_at IS NULL
+
+      # M6 — the doctor's appointment calendar, filtered on doctor_id like visits. The device
+      # books / reschedules / cancels through /sync/appointments, where doctor double-booking
+      # detection runs server-side; marking attendance is online-only (it opens a clinic visit).
+      - SELECT appointments.* FROM appointments
+        WHERE appointments.doctor_id = bucket.doctor_id
+          AND appointments.deleted_at IS NULL
