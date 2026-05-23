@@ -410,6 +410,7 @@ public sealed class DataSeeder
         PermissionKey.InvoicesVoid => "Void issued invoices.",
         PermissionKey.InventoryAdjust => "Apply inventory adjustments.",
         PermissionKey.EntitlementsApprove => "Close customer accounts and approve/pay doctor entitlements.",
+        PermissionKey.PartnershipManage => "Manage partners and partnership profit shares (partnership environments only).",
         PermissionKey.ReportsRead => "View operational and financial reports.",
         _ => key,
     };

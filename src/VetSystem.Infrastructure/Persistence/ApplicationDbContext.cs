@@ -18,6 +18,8 @@ public sealed class ApplicationDbContext : DbContext
     }
 
     public DbSet<DomainEnvironment> Environments => Set<DomainEnvironment>();
+    public DbSet<Partner> Partners => Set<Partner>();
+    public DbSet<PartnershipShare> PartnershipShares => Set<PartnershipShare>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
     public DbSet<SyncTestRecord> SyncTestRecords => Set<SyncTestRecord>();
 

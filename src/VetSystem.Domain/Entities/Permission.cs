@@ -49,6 +49,9 @@ public static class PermissionKey
     // Doctor entitlements & settlement (M9)
     public const string EntitlementsApprove = "entitlements.approve";
 
+    // Multi-environment & partnership (M10)
+    public const string PartnershipManage = "partnership.manage";
+
     // Reporting (M12)
     public const string ReportsRead = "reports.read";
 
@@ -63,6 +66,7 @@ public static class PermissionKey
         InvoicesWrite, InvoicesRefund, InvoicesVoid,
         InventoryAdjust,
         EntitlementsApprove,
+        PartnershipManage,
         ReportsRead,
     ];
 }
