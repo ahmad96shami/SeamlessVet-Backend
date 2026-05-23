@@ -181,6 +181,8 @@ builder.Services.AddScoped<VetSystem.API.Jobs.ScheduledReportDeliveryJob>();
 builder.Services.AddScoped<VetSystem.API.Reports.DoctorIncomeReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.ClinicProfitsReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.ProfitPerBatchReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.SalesReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.ProfitAndLossReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.UpcomingVaccinationsReportService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();

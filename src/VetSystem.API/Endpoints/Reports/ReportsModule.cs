@@ -28,6 +28,8 @@ public sealed class ReportsModule : IEndpointModule
         group.MapGet("/profit-per-batch", ProfitPerBatch).WithName("Reports_ProfitPerBatch");
         group.MapGet("/farm-account-status", FarmAccountStatus).WithName("Reports_FarmAccountStatus");
         group.MapGet("/doctor-entitlements", DoctorEntitlements).WithName("Reports_DoctorEntitlements");
+        group.MapGet("/sales", Sales).WithName("Reports_Sales");
+        group.MapGet("/profit-and-loss", ProfitAndLoss).WithName("Reports_ProfitAndLoss");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
     }
 
@@ -91,6 +93,29 @@ public sealed class ReportsModule : IEndpointModule
     {
         var items = await svc.ListAsync(doctorId, status, skip, take, cancellationToken);
         return TypedResults.Ok(items);
+    }
+
+    /// <summary>GET /reports/sales — money taken in over a period, broken down by payment method.</summary>
+    private static async Task<IResult> Sales(
+        SalesReportService svc,
+        DateOnly? from,
+        DateOnly? to,
+        Guid? cashierId,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, cashierId, cancellationToken);
+        return TypedResults.Ok(report);
+    }
+
+    /// <summary>GET /reports/profit-and-loss — simplified income statement for a period.</summary>
+    private static async Task<IResult> ProfitAndLoss(
+        ProfitAndLossReportService svc,
+        DateOnly? from,
+        DateOnly? to,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, cancellationToken);
+        return TypedResults.Ok(report);
     }
 
     /// <summary>GET /reports/upcoming-vaccinations — vaccinations due in a date range, by customer.</summary>
