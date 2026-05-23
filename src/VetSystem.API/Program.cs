@@ -179,6 +179,7 @@ builder.Services.AddScoped<VetSystem.API.Jobs.ScheduledReportDeliveryJob>();
 // M12 — reports (PRD §7.9). Each report is a read-only, environment-scoped, offset-paged service over
 // ApplicationDbContext; the /reports endpoint group is gated on PermissionKey.ReportsRead.
 builder.Services.AddScoped<VetSystem.API.Reports.DoctorIncomeReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.ClinicProfitsReportService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();

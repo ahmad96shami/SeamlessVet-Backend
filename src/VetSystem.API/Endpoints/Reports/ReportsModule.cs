@@ -21,6 +21,7 @@ public sealed class ReportsModule : IEndpointModule
         group.RequirePermission(PermissionKey.ReportsRead);
 
         group.MapGet("/doctor-income", DoctorIncome).WithName("Reports_DoctorIncome");
+        group.MapGet("/clinic-profits", ClinicProfits).WithName("Reports_ClinicProfits");
     }
 
     /// <summary>GET /reports/doctor-income — visit count, revenue and calculated share per doctor.</summary>
@@ -35,6 +36,17 @@ public sealed class ReportsModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var report = await svc.BuildAsync(from, to, doctorId, visitType, skip, take, cancellationToken);
+        return TypedResults.Ok(report);
+    }
+
+    /// <summary>GET /reports/clinic-profits — revenue, COGS, gross-margin net profit and the partner split.</summary>
+    private static async Task<IResult> ClinicProfits(
+        ClinicProfitsReportService svc,
+        DateOnly? from,
+        DateOnly? to,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, cancellationToken);
         return TypedResults.Ok(report);
     }
 }
