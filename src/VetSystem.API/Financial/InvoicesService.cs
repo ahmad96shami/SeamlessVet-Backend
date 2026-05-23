@@ -75,6 +75,207 @@ public sealed class InvoicesService
             cancellationToken: cancellationToken);
     }
 
+    public async Task<InvoiceResponse> IssueFieldAsync(
+        Guid visitId, FieldInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
+                    ?? throw new NotFoundException("visit", visitId);
+
+        // Field sales deduct from the visit doctor's field inventory (PRD §6.2).
+        var deduction = await ResolveFieldLocationAsync(visit.DoctorId, cancellationToken);
+
+        return await IssueItemizedAsync(
+            invoiceType: InvoiceType.Field,
+            requestId: request.Id,
+            customerId: visit.CustomerId,
+            visit: visit,
+            batchId: request.BatchId ?? visit.BatchId,
+            number: request.Number,
+            invoiceDiscount: request.DiscountAmount,
+            requestItems: request.Items,
+            payments: request.Payments,
+            idempotencyKey: request.IdempotencyKey,
+            deduction: deduction,
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Standalone exam-fee (Kashfiyya) invoice — no line items, no inventory (M7 task 6). The whole
+    /// invoice is the fee; it posts an <c>exam_fee</c> ledger entry and is the System-B input M9
+    /// credits to the doctor.
+    /// </summary>
+    public async Task<InvoiceResponse> IssueExamFeeAsync(
+        Guid visitId, ExamFeeInvoiceRequest request, CancellationToken cancellationToken)
+    {
+        var (envId, userId) = RequireUser();
+
+        var replayId = await _db.Invoices.AsNoTracking()
+            .Where(i => i.EnvironmentId == envId && i.IdempotencyKey == request.IdempotencyKey)
+            .Select(i => (Guid?)i.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (replayId is { } existing)
+        {
+            return await BuildResponseAsync(existing, cancellationToken);
+        }
+
+        var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
+                    ?? throw new NotFoundException("visit", visitId);
+
+        var settings = await _db.SystemSettings.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.EnvironmentId == envId, cancellationToken);
+        var fee = Money(request.Amount ?? visit.ExamFeeApplied ?? settings?.DefaultExamFee ?? 0m);
+
+        var normalizedNumber = string.IsNullOrWhiteSpace(request.Number) ? null : request.Number.Trim();
+        if (normalizedNumber is not null)
+        {
+            await _invoiceNumbers.ValidateAsync(normalizedNumber, excludeInvoiceId: null, cancellationToken);
+        }
+
+        if (request.Id is { } rid && rid != Guid.Empty
+            && await _db.Invoices.IgnoreQueryFilters().AnyAsync(i => i.Id == rid, cancellationToken))
+        {
+            throw new ConflictException("invoice_id_collision", $"An invoice with id '{rid}' already exists.");
+        }
+
+        var paymentSum = Money(request.Payments.Sum(p => p.Amount));
+        if (paymentSum > fee)
+        {
+            throw new ConflictException("payment_exceeds_total",
+                $"Payments ({paymentSum}) exceed the exam fee ({fee}).");
+        }
+
+        var nonCreditPaid = Money(request.Payments.Where(p => p.Method != PaymentMethod.Credit).Sum(p => p.Amount));
+
+        var invoice = new Invoice
+        {
+            Id = request.Id ?? Guid.Empty,
+            InvoiceType = InvoiceType.ExamFee,
+            CustomerId = visit.CustomerId,
+            VisitId = visit.Id,
+            BatchId = visit.BatchId,
+            Number = normalizedNumber,
+            Subtotal = fee,
+            DiscountAmount = 0m,
+            TaxAmount = 0m,
+            Total = fee,
+            Status = InvoiceStatus.Issued,
+            IssuedBy = userId,
+            IssuedAt = _clock.UtcNow,
+            IdempotencyKey = request.IdempotencyKey,
+        };
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+        _db.Invoices.Add(invoice);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        foreach (var payment in request.Payments)
+        {
+            _db.Payments.Add(new Payment
+            {
+                Id = payment.Id ?? Guid.Empty,
+                InvoiceId = invoice.Id,
+                Method = payment.Method,
+                Amount = Money(payment.Amount),
+                PaidAt = _clock.UtcNow,
+            });
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await PostInvoiceLedgerEntryAsync(invoice, visit.CustomerId, fee - nonCreditPaid, cancellationToken);
+
+        await tx.CommitAsync(cancellationToken);
+
+        return await BuildResponseAsync(invoice.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// Voids an issued invoice (M7 task 10). Append-only: the original row is left untouched; a new
+    /// <c>status='void'</c> invoice with negated totals points back to it via
+    /// <c>void_of_invoice_id</c>, and a compensating <c>adjustment</c> ledger entry reverses the
+    /// amount the original posted (skipped for walk-ins). Inventory is not auto-reversed — post a
+    /// <c>return_add</c> movement to put stock back. Idempotent: re-voiding returns the existing void.
+    /// </summary>
+    public async Task<InvoiceResponse> VoidAsync(Guid invoiceId, CancellationToken cancellationToken)
+    {
+        var (_, userId) = RequireUser();
+
+        var original = await _db.Invoices.FirstOrDefaultAsync(i => i.Id == invoiceId, cancellationToken)
+                       ?? throw new NotFoundException("invoice", invoiceId);
+
+        if (original.Status == InvoiceStatus.Void || original.VoidOfInvoiceId is not null)
+        {
+            throw new ConflictException("cannot_void_void_row", "A void row cannot itself be voided.");
+        }
+
+        // Idempotent replay: if this invoice was already voided, return the existing void row.
+        var voidKey = $"void-{original.Id}";
+        var existingVoid = await _db.Invoices.AsNoTracking()
+            .Where(i => i.VoidOfInvoiceId == original.Id)
+            .Select(i => (Guid?)i.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (existingVoid is { } already)
+        {
+            return await BuildResponseAsync(already, cancellationToken);
+        }
+
+        var voidInvoice = new Invoice
+        {
+            Id = Guid.Empty,
+            InvoiceType = original.InvoiceType,
+            CustomerId = original.CustomerId,
+            VisitId = original.VisitId,
+            BatchId = original.BatchId,
+            Number = null, // server-side reversal marker; carries no client-prefixed number
+            Subtotal = -original.Subtotal,
+            DiscountAmount = -original.DiscountAmount,
+            TaxAmount = -original.TaxAmount,
+            Total = -original.Total,
+            Status = InvoiceStatus.Void,
+            IssuedBy = userId,
+            IssuedAt = _clock.UtcNow,
+            IdempotencyKey = voidKey,
+            VoidOfInvoiceId = original.Id,
+        };
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+        _db.Invoices.Add(voidInvoice);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        // Reverse exactly what the original posted to the ledger (its outstanding portion).
+        if (original.CustomerId is { } customerId)
+        {
+            var nonCreditPaid = await _db.Payments
+                .Where(p => p.InvoiceId == original.Id && p.Method != PaymentMethod.Credit)
+                .SumAsync(p => (decimal?)p.Amount, cancellationToken) ?? 0m;
+            var reversal = -(original.Total - Money(nonCreditPaid));
+
+            var ledgerId = await _db.Ledgers
+                .Where(l => l.CustomerId == customerId)
+                .Select(l => (Guid?)l.Id)
+                .FirstOrDefaultAsync(cancellationToken)
+                ?? throw new NotFoundException("ledger", customerId);
+
+            await _ledgers.AppendEntryAsync(
+                new LedgerEntryRequest(
+                    Id: null,
+                    LedgerId: ledgerId,
+                    EntryType: LedgerEntryType.Adjustment,
+                    Amount: reversal,
+                    InvoiceId: voidInvoice.Id,
+                    ReceiptVoucherId: null,
+                    Description: original.Number is null ? "Void of invoice" : $"Void of invoice {original.Number}",
+                    IdempotencyKey: $"void-ledger-{original.Id}"),
+                cancellationToken);
+        }
+
+        await tx.CommitAsync(cancellationToken);
+
+        return await BuildResponseAsync(voidInvoice.Id, cancellationToken);
+    }
+
     public async Task<InvoiceResponse> GetAsync(Guid id, CancellationToken cancellationToken)
     {
         var exists = await _db.Invoices.AsNoTracking().AnyAsync(i => i.Id == id, cancellationToken);
@@ -489,6 +690,18 @@ public sealed class InvoicesService
                 "No warehouse exists in this environment to deduct sold products from.");
 
         return new DeductionLocation(StockLocation.Warehouse, warehouseId);
+    }
+
+    private async Task<DeductionLocation> ResolveFieldLocationAsync(Guid doctorId, CancellationToken cancellationToken)
+    {
+        var fieldId = await _db.FieldInventories
+            .Where(fi => fi.DoctorId == doctorId)
+            .Select(fi => (Guid?)fi.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new ConflictException("no_field_inventory",
+                "The visit's field doctor has no field inventory to deduct sold products from.");
+
+        return new DeductionLocation(StockLocation.Field, fieldId);
     }
 
     private (Guid EnvironmentId, Guid UserId) RequireUser()

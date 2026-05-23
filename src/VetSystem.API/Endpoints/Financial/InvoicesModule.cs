@@ -21,6 +21,11 @@ public sealed class InvoicesModule : IEndpointModule
         invoices.MapGet("/", List).WithName("Invoices_List");
         invoices.MapGet("/{id:guid}", Get).WithName("Invoices_Get");
 
+        invoices.MapPost("/{id:guid}/void", Void)
+            .RequirePermission(PermissionKey.InvoicesVoid)
+            .AddEndpointFilter(new IdempotencyKeyFilter("invoice_void"))
+            .WithName("Invoices_Void");
+
         var pos = endpoints.MapGroup("/pos/invoices")
             .RequireAuthorization()
             .WithTags("Invoices");
@@ -30,6 +35,24 @@ public sealed class InvoicesModule : IEndpointModule
             .AddEndpointFilter<ValidationFilter<PosInvoiceRequest>>()
             .AddEndpointFilter(new IdempotencyKeyFilter("pos_invoice"))
             .WithName("Invoices_CreatePos");
+
+        // Visit-scoped issuance: field invoice (deducts from the doctor's field inventory) and the
+        // standalone exam-fee invoice (System B input for M9).
+        var visitInvoices = endpoints.MapGroup("/visits/{visitId:guid}")
+            .RequireAuthorization()
+            .WithTags("Invoices");
+
+        visitInvoices.MapPost("/field-invoice", CreateField)
+            .RequirePermission(PermissionKey.InvoicesWrite)
+            .AddEndpointFilter<ValidationFilter<FieldInvoiceRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("field_invoice"))
+            .WithName("Invoices_CreateField");
+
+        visitInvoices.MapPost("/exam-fee-invoice", CreateExamFee)
+            .RequirePermission(PermissionKey.InvoicesWrite)
+            .AddEndpointFilter<ValidationFilter<ExamFeeInvoiceRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("exam_fee_invoice"))
+            .WithName("Invoices_CreateExamFee");
     }
 
     private static async Task<IResult> List(
@@ -51,12 +74,38 @@ public sealed class InvoicesModule : IEndpointModule
         return TypedResults.Ok(invoice);
     }
 
+    private static async Task<IResult> Void(Guid id, InvoicesService svc, CancellationToken cancellationToken)
+    {
+        var voidInvoice = await svc.VoidAsync(id, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(voidInvoice.Id));
+    }
+
     private static async Task<IResult> CreatePos(
         PosInvoiceRequest request,
         InvoicesService svc,
         CancellationToken cancellationToken)
     {
         var invoice = await svc.IssuePosAsync(request, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(invoice.Id));
+    }
+
+    private static async Task<IResult> CreateField(
+        Guid visitId,
+        FieldInvoiceRequest request,
+        InvoicesService svc,
+        CancellationToken cancellationToken)
+    {
+        var invoice = await svc.IssueFieldAsync(visitId, request, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(invoice.Id));
+    }
+
+    private static async Task<IResult> CreateExamFee(
+        Guid visitId,
+        ExamFeeInvoiceRequest request,
+        InvoicesService svc,
+        CancellationToken cancellationToken)
+    {
+        var invoice = await svc.IssueExamFeeAsync(visitId, request, cancellationToken);
         return TypedResults.Ok(new IdentifierResponse(invoice.Id));
     }
 }
