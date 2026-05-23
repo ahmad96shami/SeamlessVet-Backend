@@ -38,6 +38,11 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<Ledger> Ledgers => Set<Ledger>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
 
+    public DbSet<Warehouse> Warehouses => Set<Warehouse>();
+    public DbSet<FieldInventory> FieldInventories => Set<FieldInventory>();
+    public DbSet<StockItem> StockItems => Set<StockItem>();
+    public DbSet<InventoryMovement> InventoryMovements => Set<InventoryMovement>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.
