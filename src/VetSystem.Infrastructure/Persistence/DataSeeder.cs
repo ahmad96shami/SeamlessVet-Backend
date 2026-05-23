@@ -62,6 +62,7 @@ public sealed class DataSeeder
             await SeedPermissionsAsync(env.Id, cancellationToken);
             await SeedRolePermissionDefaultsAsync(env.Id, cancellationToken);
             await SeedSystemSettingsAsync(env.Id, cancellationToken);
+            await SeedWarehouseAsync(env.Id, cancellationToken);
         }
 
         await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
@@ -225,6 +226,29 @@ public sealed class DataSeeder
         _logger.LogInformation("Seeded default system_settings row for environment {EnvironmentId}", environmentId);
     }
 
+    private async Task SeedWarehouseAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        // M4 task 2 — one central warehouse per environment. Field inventories are created on
+        // demand when a field doctor is approved (UserAdminService), not here.
+        var exists = await _db.Warehouses
+            .IgnoreQueryFilters()
+            .AnyAsync(w => w.EnvironmentId == environmentId, cancellationToken);
+
+        if (exists)
+        {
+            return;
+        }
+
+        _db.Warehouses.Add(new Warehouse
+        {
+            EnvironmentId = environmentId,
+            Name = "Central",
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Seeded central warehouse for environment {EnvironmentId}", environmentId);
+    }
+
     private async Task SeedBootstrapAdminAsync(Guid environmentId, CancellationToken cancellationToken)
     {
         var section = _configuration.GetSection("BootstrapAdmin");
@@ -279,6 +303,10 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              inventory_movements,
+              stock_items,
+              field_inventories,
+              warehouses,
               ledger_entries,
               ledgers,
               pets,

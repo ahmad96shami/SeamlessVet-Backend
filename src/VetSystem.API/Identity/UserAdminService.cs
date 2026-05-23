@@ -78,6 +78,9 @@ public sealed class UserAdminService
         req.ReviewedAt = _clock.UtcNow;
         req.ReviewNotes = request.Notes;
 
+        // M4 task 3 — provision the field doctor's "moving warehouse" in the same transaction.
+        await EnsureFieldInventoryAsync(user, req.RequestedRoleKey, cancellationToken);
+
         await _db.SaveChangesAsync(cancellationToken);
         _permissionResolver.Invalidate(user.Id);
 
@@ -184,6 +187,32 @@ public sealed class UserAdminService
                    ?? throw new NotFoundException("user", req.UserId);
 
         return (req, user);
+    }
+
+    /// <summary>
+    /// M4 task 3 — a field doctor's field inventory (SCHEMA §4 "moving warehouse") is provisioned
+    /// on approval so it exists before any load-to-field movement. Added to the change tracker and
+    /// saved atomically with the approval. Idempotent: a pre-existing row (re-approval, manual seed)
+    /// no-ops. Clinic-only roles get no field inventory.
+    /// </summary>
+    private async Task EnsureFieldInventoryAsync(User user, string roleKey, CancellationToken cancellationToken)
+    {
+        if (roleKey != RoleKey.VetField && roleKey != RoleKey.VetBoth)
+        {
+            return;
+        }
+
+        var exists = await _db.FieldInventories.AnyAsync(f => f.DoctorId == user.Id, cancellationToken);
+        if (exists)
+        {
+            return;
+        }
+
+        _db.FieldInventories.Add(new FieldInventory
+        {
+            EnvironmentId = user.EnvironmentId,
+            DoctorId = user.Id,
+        });
     }
 
     private Guid RequireReviewerId() =>
