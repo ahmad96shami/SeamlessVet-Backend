@@ -64,6 +64,17 @@ public sealed class AuditingSaveChangesInterceptor : SaveChangesInterceptor
                         entry.Entity.EnvironmentId = env;
                     }
 
+                    // Hard isolation guard (M10 task 7): every syncable row must be stamped with an
+                    // environment before it is written. If neither the row nor the current user supplied
+                    // one, fail fast here rather than letting a NULL hit the database — a row with no
+                    // environment is invisible to the env-scoped query filter and would orphan/leak.
+                    if (entry.Entity.EnvironmentId == Guid.Empty)
+                    {
+                        throw new InvalidOperationException(
+                            $"EnvironmentId was not set on {entry.Entity.GetType().Name} before save and could "
+                            + "not be resolved from the current user; every syncable entity must be environment-scoped.");
+                    }
+
                     entry.Entity.CreatedAt = now;
                     entry.Entity.UpdatedAt = now;
                     break;

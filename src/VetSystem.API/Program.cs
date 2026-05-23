@@ -138,6 +138,15 @@ builder.Services.AddScoped<VetSystem.Application.Entitlements.IEntitlementServic
     VetSystem.Infrastructure.Entitlements.EntitlementService>();
 builder.Services.AddScoped<VetSystem.API.Entitlements.EntitlementSettlementService>();
 
+// M10 — multi-environment & partnership. The share-limit validator is pure (no state), a singleton
+// like the entitlement calculators; the profit-distribution service reads the DB, so it is scoped.
+builder.Services.AddSingleton<VetSystem.Application.Partnership.IPartnershipValidator,
+    VetSystem.Application.Partnership.PartnershipShareLimitValidator>();
+builder.Services.AddScoped<VetSystem.Application.Partnership.IProfitDistributionService,
+    VetSystem.Infrastructure.Partnership.ProfitDistributionService>();
+builder.Services.AddScoped<VetSystem.API.Partnership.PartnersService>();
+builder.Services.AddScoped<VetSystem.API.Partnership.PartnershipSharesService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
