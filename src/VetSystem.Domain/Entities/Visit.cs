@@ -79,8 +79,31 @@ public static class VisitStatus
 
     public static readonly IReadOnlyCollection<string> All = [Open, InProgress, Completed, Cancelled];
 
+    /// <summary>States allowed when creating a visit — it can't be born already closed.</summary>
+    public static readonly IReadOnlyCollection<string> Creatable = [Open, InProgress];
+
     /// <summary>Terminal states are server-authoritative and reject medical-content edits.</summary>
     public static bool IsTerminal(string status) => status is Completed or Cancelled;
+
+    /// <summary>
+    /// State machine (PRD §5.2): <c>open → in_progress | completed | cancelled</c>,
+    /// <c>in_progress → completed | cancelled</c>; <c>completed</c>/<c>cancelled</c> are terminal.
+    /// A no-op (same state) is not a transition.
+    /// </summary>
+    public static bool CanTransition(string from, string to)
+    {
+        if (!All.Contains(from) || !All.Contains(to))
+        {
+            return false;
+        }
+
+        return from switch
+        {
+            Open => to is InProgress or Completed or Cancelled,
+            InProgress => to is Completed or Cancelled,
+            _ => false,
+        };
+    }
 }
 
 public static class Severity
