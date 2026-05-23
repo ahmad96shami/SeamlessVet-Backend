@@ -40,6 +40,8 @@ builder.Host.UseSerilog((context, services, configuration) =>
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<PowerSyncOptions>(builder.Configuration.GetSection(PowerSyncOptions.SectionName));
+builder.Services.Configure<VetSystem.Infrastructure.Storage.R2Options>(
+    builder.Configuration.GetSection(VetSystem.Infrastructure.Storage.R2Options.SectionName));
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, HttpCurrentUserAccessor>();
@@ -86,6 +88,9 @@ builder.Services.AddScoped<VetSystem.API.Procedures.ProceduresService>();
 builder.Services.AddScoped<VetSystem.API.Prescriptions.PrescriptionsService>();
 builder.Services.AddScoped<VetSystem.API.DailyFollowUps.DailyFollowUpsService>();
 builder.Services.AddScoped<VetSystem.API.Vaccinations.VaccinationsService>();
+builder.Services.AddSingleton<VetSystem.Application.Storage.ISignedUrlService,
+    VetSystem.Infrastructure.Storage.R2SignedUrlService>();
+builder.Services.AddScoped<VetSystem.API.Attachments.AttachmentsService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
