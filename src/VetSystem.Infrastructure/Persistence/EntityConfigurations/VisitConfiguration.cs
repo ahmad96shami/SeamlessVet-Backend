@@ -83,7 +83,15 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
             .HasForeignKey(v => v.ReceptionistId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        // batch_id / contract_id FK targets land in M8 — the columns exist now so field visits can
-        // carry them as soon as those tables come online.
+        // M8 — the batch_id / contract_id FK targets now exist (columns shipped in M5).
+        builder.HasOne<Batch>()
+            .WithMany()
+            .HasForeignKey(v => v.BatchId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<Contract>()
+            .WithMany()
+            .HasForeignKey(v => v.ContractId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

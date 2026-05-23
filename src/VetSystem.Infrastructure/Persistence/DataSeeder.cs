@@ -307,6 +307,9 @@ public sealed class DataSeeder
               invoice_items,
               receipt_vouchers,
               invoices,
+              batches,
+              contract_medication_prices,
+              contracts,
               attachments,
               vaccinations,
               daily_follow_ups,
@@ -352,6 +355,8 @@ public sealed class DataSeeder
                 PermissionKey.SettingsWrite,
                 PermissionKey.CatalogWrite,
                 PermissionKey.CustomersWrite,
+                PermissionKey.ContractsWrite,
+                PermissionKey.ContractsActivate,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -362,9 +367,13 @@ public sealed class DataSeeder
             // and doctors can book/reschedule from either client.
             // M7: field-capable vets get invoices.write so they can issue field/exam-fee invoices and
             // receipt vouchers on-site (PRD §6.2). Clinic POS issuance is the cashier's job.
+            // M8: field-capable vets get contracts.write so they can author/edit DRAFT contracts for
+            // their assigned farms offline (PRD §6.6). They do NOT get contracts.activate by default —
+            // promoting Draft → Active is an Admin/Accountant, online-confirmed action (PRD §8.9); grant
+            // it to a field role only if the business wants full field autonomy.
             [RoleKey.VetClinic] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
-            [RoleKey.VetField] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite],
-            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite],
+            [RoleKey.VetField] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite, PermissionKey.ContractsWrite],
+            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite, PermissionKey.InvoicesWrite, PermissionKey.ContractsWrite],
             [RoleKey.Receptionist] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite, PermissionKey.AppointmentsWrite],
             [RoleKey.Cashier] = [PermissionKey.InvoicesWrite],
         };
@@ -392,6 +401,7 @@ public sealed class DataSeeder
         PermissionKey.CustomersWrite => "Create, edit, and remove customers, pets, and ledger entries.",
         PermissionKey.MedicalWrite => "Create and edit visits, procedures, prescriptions, follow-ups, vaccinations, and attachments.",
         PermissionKey.AppointmentsWrite => "Create, reschedule, and resolve (attend/cancel/no-show) appointments.",
+        PermissionKey.ContractsWrite => "Create and edit draft contracts, batches, and per-medication contract prices.",
         PermissionKey.ContractsActivate => "Promote draft contracts to active.",
         PermissionKey.InvoicesWrite => "Issue POS, field, and exam-fee invoices and receipt vouchers.",
         PermissionKey.InvoicesRefund => "Refund issued invoices.",

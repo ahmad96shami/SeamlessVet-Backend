@@ -34,7 +34,8 @@ public static class PermissionKey
     // Appointments (M6)
     public const string AppointmentsWrite = "appointments.write";
 
-    // Contracts (M8)
+    // Contracts & batches (M8)
+    public const string ContractsWrite = "contracts.write";
     public const string ContractsActivate = "contracts.activate";
 
     // Financial (M7)
@@ -55,7 +56,7 @@ public static class PermissionKey
         CustomersWrite,
         MedicalWrite,
         AppointmentsWrite,
-        ContractsActivate,
+        ContractsWrite, ContractsActivate,
         InvoicesWrite, InvoicesRefund, InvoicesVoid,
         InventoryAdjust,
         ReportsRead,

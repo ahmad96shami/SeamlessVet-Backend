@@ -67,6 +67,10 @@ internal sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
             .HasForeignKey(i => i.VoidOfInvoiceId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        // batch_id FK target lands in M8; the column exists now so field invoices can carry it.
+        // M8 — the batch_id FK target now exists; field invoices link into a cycle's drug-profit calc.
+        builder.HasOne<Batch>()
+            .WithMany()
+            .HasForeignKey(i => i.BatchId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
