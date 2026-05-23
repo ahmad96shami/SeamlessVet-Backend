@@ -91,6 +91,7 @@ builder.Services.AddScoped<VetSystem.API.Vaccinations.VaccinationsService>();
 builder.Services.AddSingleton<VetSystem.Application.Storage.ISignedUrlService,
     VetSystem.Infrastructure.Storage.R2SignedUrlService>();
 builder.Services.AddScoped<VetSystem.API.Attachments.AttachmentsService>();
+builder.Services.AddScoped<VetSystem.API.Pets.PetTimelineService>();
 
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();

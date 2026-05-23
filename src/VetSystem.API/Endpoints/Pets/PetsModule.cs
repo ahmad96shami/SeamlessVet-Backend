@@ -26,6 +26,10 @@ public sealed class PetsModule : IEndpointModule
         group.MapGet("/{id:guid}", Get)
             .WithName("Pets_Get");
 
+        // M5 task 17 — chronological medical timeline (clinic + field visits) for a pet.
+        group.MapGet("/{id:guid}/timeline", Timeline)
+            .WithName("Pets_Timeline");
+
         group.MapPost("/", Create)
             .RequirePermission(PermissionKey.CustomersWrite)
             .AddEndpointFilter<ValidationFilter<PetRequest>>()
@@ -67,6 +71,18 @@ public sealed class PetsModule : IEndpointModule
     {
         var item = await svc.GetAsync(id, cancellationToken);
         return TypedResults.Ok(item);
+    }
+
+    private static async Task<IResult> Timeline(
+        Guid id,
+        PetTimelineService svc,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        Guid? doctorId,
+        CancellationToken cancellationToken)
+    {
+        var timeline = await svc.GetAsync(id, from, to, doctorId, cancellationToken);
+        return TypedResults.Ok(timeline);
     }
 
     private static async Task<IResult> Create(
