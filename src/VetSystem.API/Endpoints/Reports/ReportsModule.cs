@@ -30,6 +30,7 @@ public sealed class ReportsModule : IEndpointModule
         group.MapGet("/doctor-entitlements", DoctorEntitlements).WithName("Reports_DoctorEntitlements");
         group.MapGet("/sales", Sales).WithName("Reports_Sales");
         group.MapGet("/profit-and-loss", ProfitAndLoss).WithName("Reports_ProfitAndLoss");
+        group.MapGet("/inventory-movement", InventoryMovement).WithName("Reports_InventoryMovement");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
     }
 
@@ -115,6 +116,22 @@ public sealed class ReportsModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var report = await svc.BuildAsync(from, to, cancellationToken);
+        return TypedResults.Ok(report);
+    }
+
+    /// <summary>GET /reports/inventory-movement — inflows/outflows/balance per (location, product).</summary>
+    private static async Task<IResult> InventoryMovement(
+        InventoryMovementReportService svc,
+        DateOnly? from,
+        DateOnly? to,
+        Guid? productId,
+        string? locationType,
+        Guid? locationId,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, productId, locationType, locationId, skip, take, cancellationToken);
         return TypedResults.Ok(report);
     }
 
