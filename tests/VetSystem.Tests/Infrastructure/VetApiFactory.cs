@@ -30,18 +30,40 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
     public const string TestJwtIssuer = "vet-system-api";
     public const string TestJwtAudience = "vet-system-clients";
 
+    /// <summary>
+    /// Optional R2/S3 overrides. When <see cref="R2ServiceUrl"/> is set (e.g. a MinIO test
+    /// container), the host's <c>R2</c> config points at it so attachment uploads/downloads round-trip
+    /// for real. Left null by default, so the placeholder config applies and non-R2 tests are
+    /// unaffected. Set via object initializer before the first <c>CreateClient</c>/<c>Services</c> use.
+    /// </summary>
+    public string? R2ServiceUrl { get; init; }
+    public string? R2AccessKey { get; init; }
+    public string? R2SecretKey { get; init; }
+    public string? R2Bucket { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Test");
 
         builder.ConfigureAppConfiguration((_, cfg) =>
         {
-            cfg.AddInMemoryCollection(new Dictionary<string, string?>
+            var overrides = new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Postgres"] = PgTestScope.ConnectionString,
                 // BootstrapAdmin:Password remains a placeholder so the seeder no-ops in tests;
                 // we drive ours through PgTestScope + AdminTestSeed instead.
-            });
+            };
+
+            if (R2ServiceUrl is not null)
+            {
+                overrides["R2:ServiceUrl"] = R2ServiceUrl;
+                overrides["R2:AccessKey"] = R2AccessKey;
+                overrides["R2:SecretKey"] = R2SecretKey;
+                overrides["R2:Bucket"] = R2Bucket;
+                overrides["R2:Region"] = "us-east-1";
+            }
+
+            cfg.AddInMemoryCollection(overrides);
         });
 
         builder.ConfigureServices(services =>

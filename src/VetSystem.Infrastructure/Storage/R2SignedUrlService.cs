@@ -25,6 +25,9 @@ public sealed class R2SignedUrlService : ISignedUrlService, IDisposable
             ServiceURL = _options.ServiceUrl,
             ForcePathStyle = true,
             AuthenticationRegion = _options.Region,
+            // Presigned URLs must keep the endpoint's scheme. R2 is https; a local MinIO is http,
+            // and the SDK otherwise defaults presigned URLs to https (breaking the upload).
+            UseHttp = _options.ServiceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase),
         };
 
         _s3 = new AmazonS3Client(new BasicAWSCredentials(_options.AccessKey, _options.SecretKey), config);
@@ -54,6 +57,16 @@ public sealed class R2SignedUrlService : ISignedUrlService, IDisposable
         }
 
         var url = await _s3.GetPreSignedURLAsync(request);
+
+        // The SDK emits https even when ServiceURL is http; force the configured scheme. SigV4 signs
+        // the host header (not the scheme), so this does not invalidate the signature — it just lets
+        // a plaintext-http MinIO/dev endpoint work while production R2 (https) is untouched.
+        if (_options.ServiceUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            && url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            url = string.Concat("http://", url.AsSpan("https://".Length));
+        }
+
         return new SignedUrl(url, new DateTimeOffset(expiresAt));
     }
 
