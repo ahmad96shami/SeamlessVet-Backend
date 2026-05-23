@@ -60,3 +60,47 @@ bucket_definitions:
         WHERE inventory_movements.to_location_type = 'field'
           AND field_inventories.doctor_id = bucket.doctor_id
           AND inventory_movements.deleted_at IS NULL
+
+      # M5 — visits the doctor ran, plus their clinical child records (procedures, prescriptions,
+      # follow-ups, vaccinations, attachments) by the visit FK chain. The device upload connector
+      # writes these back through the .NET /sync/* endpoints, where the field-visit conflict rule
+      # and inventory invariants are enforced.
+      #
+      # 6-month "hot window" (PRD §8.6): PowerSync Sync Rules are static and cannot express a
+      # self-advancing relative window (a row synced today would never auto-evict as the clock
+      # moves). The window is therefore a CLIENT concern: the mobile app passes a `visits_hot_since`
+      # connection parameter (recomputed to ~6 months ago on each connect) and trims older rows
+      # locally; older records are fetched on-demand when opened online. When the client sends that
+      # parameter, add it to this bucket's parameter query (token-trusted doctor_id stays separate)
+      # and append `AND visits.started_at >= bucket.visits_hot_since` to the visits query below.
+      - SELECT visits.* FROM visits
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND visits.deleted_at IS NULL
+      - SELECT procedures.* FROM procedures
+        JOIN visits ON procedures.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND procedures.deleted_at IS NULL
+      - SELECT prescriptions.* FROM prescriptions
+        JOIN visits ON prescriptions.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND prescriptions.deleted_at IS NULL
+      - SELECT daily_follow_ups.* FROM daily_follow_ups
+        JOIN visits ON daily_follow_ups.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND daily_follow_ups.deleted_at IS NULL
+      - SELECT attachments.* FROM attachments
+        JOIN visits ON attachments.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND attachments.deleted_at IS NULL
+      # Visit-linked vaccinations…
+      - SELECT vaccinations.* FROM vaccinations
+        JOIN visits ON vaccinations.visit_id = visits.id
+        WHERE visits.doctor_id = bucket.doctor_id
+          AND vaccinations.deleted_at IS NULL
+      # …plus standalone pet vaccinations for the doctor's assigned customers (no visit_id),
+      # so the next-due schedule is available on-device regardless of visit recency.
+      - SELECT vaccinations.* FROM vaccinations
+        JOIN pets ON vaccinations.pet_id = pets.id
+        JOIN customers ON pets.customer_id = customers.id
+        WHERE customers.assigned_doctor_id = bucket.doctor_id
+          AND vaccinations.deleted_at IS NULL
