@@ -72,6 +72,25 @@ public sealed class ReportExportTests
         amountCell.GetDouble().Should().Be(120.50);
     }
 
+    [Fact]
+    public void Pdf_ArabicReport_IsValid_AndSnapshotWritten()
+    {
+        // Clinic-profits carries Arabic partner names + a table + summary — a representative Arabic page.
+        var document = ReportDocuments.ClinicProfits(SampleClinicProfits());
+
+        var bytes = Pdf.Render(document);
+
+        IsPdf(bytes).Should().BeTrue();
+        EndsWithEof(bytes).Should().BeTrue("a complete PDF ends with %%EOF");
+
+        // Persist the artifact for the manual visual sign-off (task 19).
+        var dir = Path.Combine(AppContext.BaseDirectory, "ReportSnapshots");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "clinic-profits-ar.pdf");
+        File.WriteAllBytes(path, bytes);
+        File.Exists(path).Should().BeTrue();
+    }
+
     [Theory]
     [InlineData(null, ReportFormat.Json)]
     [InlineData("", ReportFormat.Json)]
@@ -204,4 +223,10 @@ public sealed class ReportExportTests
 
     private static bool IsPdf(byte[] bytes) =>
         bytes.Length > 5 && Encoding.ASCII.GetString(bytes, 0, 5) == "%PDF-";
+
+    private static bool EndsWithEof(byte[] bytes)
+    {
+        var tail = Encoding.ASCII.GetString(bytes, Math.Max(0, bytes.Length - 8), Math.Min(8, bytes.Length));
+        return tail.Contains("%%EOF", StringComparison.Ordinal);
+    }
 }
