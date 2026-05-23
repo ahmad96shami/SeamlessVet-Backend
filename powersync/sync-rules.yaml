@@ -150,3 +150,20 @@ bucket_definitions:
         JOIN customers ON receipt_vouchers.customer_id = customers.id
         WHERE customers.assigned_doctor_id = bucket.doctor_id
           AND receipt_vouchers.deleted_at IS NULL
+
+      # M8 — contracts & batches: the contracts the doctor is responsible for, those contracts'
+      # per-medication price overrides (via the contract FK chain), and the doctor's batches (PRD §8.6).
+      # A DRAFT contract (and its medication prices) is doctor-device authoritative and written back
+      # through /sync/contracts + /sync/contract_medication_prices; once active+ those paths defer to
+      # the server (SCHEMA invariant #5). batches are server-authoritative — pulled read-only here and
+      # configured online via the /batches endpoints (PRD §7, §8.9).
+      - SELECT contracts.* FROM contracts
+        WHERE contracts.responsible_doctor_id = bucket.doctor_id
+          AND contracts.deleted_at IS NULL
+      - SELECT contract_medication_prices.* FROM contract_medication_prices
+        JOIN contracts ON contract_medication_prices.contract_id = contracts.id
+        WHERE contracts.responsible_doctor_id = bucket.doctor_id
+          AND contract_medication_prices.deleted_at IS NULL
+      - SELECT batches.* FROM batches
+        WHERE batches.responsible_doctor_id = bucket.doctor_id
+          AND batches.deleted_at IS NULL

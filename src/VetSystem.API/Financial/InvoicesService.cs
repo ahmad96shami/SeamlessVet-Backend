@@ -1,6 +1,7 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
+using VetSystem.Application.Contracts;
 using VetSystem.Application.Financial;
 using VetSystem.Application.Financial.Contracts;
 using VetSystem.Application.Inventory;
@@ -34,6 +35,7 @@ public sealed class InvoicesService
     private readonly IInvoiceNumberValidator _invoiceNumbers;
     private readonly IInventoryService _inventory;
     private readonly ILedgerService _ledgers;
+    private readonly IPricingService _pricing;
 
     public InvoicesService(
         ApplicationDbContext db,
@@ -42,7 +44,8 @@ public sealed class InvoicesService
         IClock clock,
         IInvoiceNumberValidator invoiceNumbers,
         IInventoryService inventory,
-        ILedgerService ledgers)
+        ILedgerService ledgers,
+        IPricingService pricing)
     {
         _db = db;
         _currentUser = currentUser;
@@ -51,6 +54,7 @@ public sealed class InvoicesService
         _invoiceNumbers = invoiceNumbers;
         _inventory = inventory;
         _ledgers = ledgers;
+        _pricing = pricing;
     }
 
     public async Task<InvoiceResponse> IssuePosAsync(PosInvoiceRequest request, CancellationToken cancellationToken)
@@ -72,6 +76,9 @@ public sealed class InvoicesService
             payments: request.Payments,
             idempotencyKey: request.IdempotencyKey,
             deduction: deduction,
+            // POS (clinic retail) bills at catalog price — contract pricing is a field-visit concern (PRD §6.6).
+            applyContractPricing: false,
+            pricingAsOf: DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime),
             cancellationToken: cancellationToken);
     }
 
@@ -96,6 +103,10 @@ public sealed class InvoicesService
             payments: request.Payments,
             idempotencyKey: request.IdempotencyKey,
             deduction: deduction,
+            // Field visits to a contracted customer bill product lines at the contract-overridden price
+            // when an active contract applies on the visit date (PRD §6.6); else catalog price.
+            applyContractPricing: true,
+            pricingAsOf: DateOnly.FromDateTime((visit.StartedAt ?? _clock.UtcNow).UtcDateTime),
             cancellationToken: cancellationToken);
     }
 
@@ -327,6 +338,8 @@ public sealed class InvoicesService
         IReadOnlyList<PaymentRequest> payments,
         string idempotencyKey,
         DeductionLocation deduction,
+        bool applyContractPricing,
+        DateOnly pricingAsOf,
         CancellationToken cancellationToken)
     {
         var (envId, userId) = RequireUser();
@@ -362,12 +375,12 @@ public sealed class InvoicesService
         var lines = new List<ResolvedLine>();
         foreach (var item in requestItems)
         {
-            lines.Add(await ResolveExplicitLineAsync(item, cancellationToken));
+            lines.Add(await ResolveExplicitLineAsync(item, customerId, pricingAsOf, applyContractPricing, cancellationToken));
         }
 
         if (visit is not null)
         {
-            lines.AddRange(await AssembleVisitLinesAsync(visit, cancellationToken));
+            lines.AddRange(await AssembleVisitLinesAsync(visit, customerId, pricingAsOf, applyContractPricing, cancellationToken));
         }
 
         if (lines.Count == 0)
@@ -517,7 +530,12 @@ public sealed class InvoicesService
             cancellationToken);
     }
 
-    private async Task<ResolvedLine> ResolveExplicitLineAsync(InvoiceLineRequest item, CancellationToken cancellationToken)
+    private async Task<ResolvedLine> ResolveExplicitLineAsync(
+        InvoiceLineRequest item,
+        Guid? customerId,
+        DateOnly pricingAsOf,
+        bool applyContractPricing,
+        CancellationToken cancellationToken)
     {
         decimal unitPrice;
         decimal costPrice;
@@ -527,7 +545,10 @@ public sealed class InvoicesService
         {
             var product = await _db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId, cancellationToken)
                           ?? throw new NotFoundException("product", productId);
-            unitPrice = item.UnitPrice ?? product.SellingPrice;
+            // An explicit request unit_price always wins; otherwise field invoices resolve the
+            // contract-overridden price (M8) and everything else falls back to the catalog price.
+            unitPrice = item.UnitPrice
+                ?? await ResolveProductUnitPriceAsync(productId, product.SellingPrice, customerId, pricingAsOf, applyContractPricing, cancellationToken);
             costPrice = product.PurchasePrice; // snapshot — never recomputed (SCHEMA invariant #8)
             description ??= product.NameAr;
         }
@@ -556,9 +577,15 @@ public sealed class InvoicesService
     /// <summary>
     /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c>
     /// prescription and every billable procedure that no existing invoice line already references.
-    /// Prices come from the catalog now; M8's pricing service swaps in contract-overridden prices.
+    /// On field invoices, dispensed-med lines bill at the contract-overridden price when one applies
+    /// (M8 task 10); procedures (services) are never contract-overridden and use the procedure price.
     /// </summary>
-    private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(Visit visit, CancellationToken cancellationToken)
+    private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(
+        Visit visit,
+        Guid? customerId,
+        DateOnly pricingAsOf,
+        bool applyContractPricing,
+        CancellationToken cancellationToken)
     {
         var lines = new List<ResolvedLine>();
 
@@ -588,15 +615,17 @@ public sealed class InvoicesService
                 }
 
                 var quantity = rx.Quantity ?? 1m;
+                var unitPrice = await ResolveProductUnitPriceAsync(
+                    rx.ProductId, product.SellingPrice, customerId, pricingAsOf, applyContractPricing, cancellationToken);
                 lines.Add(new ResolvedLine(
                     ProductId: rx.ProductId,
                     ServiceId: null,
                     Description: product.NameAr,
                     Quantity: quantity,
-                    UnitPrice: product.SellingPrice,
+                    UnitPrice: unitPrice,
                     CostPrice: product.PurchasePrice,
                     DiscountAmount: 0m,
-                    LineTotal: Money(quantity * product.SellingPrice),
+                    LineTotal: Money(quantity * unitPrice),
                     PrescriptionId: rx.Id,
                     ProcedureId: null));
             }
@@ -632,6 +661,28 @@ public sealed class InvoicesService
         }
 
         return lines;
+    }
+
+    /// <summary>
+    /// The default sale price for a product line (M8 task 10). On field invoices with a customer, the
+    /// pricing service applies the active-contract override when one exists; otherwise — and always on
+    /// POS — the catalog selling price is used. Cost is snapshotted separately and is unaffected.
+    /// </summary>
+    private async Task<decimal> ResolveProductUnitPriceAsync(
+        Guid productId,
+        decimal catalogSellingPrice,
+        Guid? customerId,
+        DateOnly pricingAsOf,
+        bool applyContractPricing,
+        CancellationToken cancellationToken)
+    {
+        if (!applyContractPricing || customerId is null)
+        {
+            return catalogSellingPrice;
+        }
+
+        var resolved = await _pricing.ResolveUnitPriceAsync(productId, customerId, pricingAsOf, cancellationToken);
+        return resolved.IsContractPrice ? resolved.UnitPrice : catalogSellingPrice;
     }
 
     private async Task<InvoiceResponse> BuildResponseAsync(Guid invoiceId, CancellationToken cancellationToken)

@@ -104,6 +104,15 @@ builder.Services.AddScoped<VetSystem.Application.Financial.IInvoiceNumberValidat
 builder.Services.AddScoped<VetSystem.API.Financial.InvoicesService>();
 builder.Services.AddScoped<VetSystem.API.Financial.ReceiptVouchersService>();
 
+// M8 — contracts & batches (lifecycle, per-medication pricing, supervision cycles)
+builder.Services.AddScoped<VetSystem.Application.Contracts.IContractLifecycleService,
+    VetSystem.Infrastructure.Contracts.ContractLifecycleService>();
+builder.Services.AddScoped<VetSystem.Application.Contracts.IPricingService,
+    VetSystem.Infrastructure.Contracts.PricingService>();
+builder.Services.AddScoped<VetSystem.API.Contracts.ContractsService>();
+builder.Services.AddScoped<VetSystem.API.Contracts.ContractMedicationPricesService>();
+builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
@@ -123,6 +132,9 @@ builder.Services.AddScoped<ISyncTableHandler, InvoicesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, InvoiceItemsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, PaymentsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ReceiptVouchersSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, ContractsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, ContractMedicationPricesSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, BatchesSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();
 
 builder.Services.AddMemoryCache();
