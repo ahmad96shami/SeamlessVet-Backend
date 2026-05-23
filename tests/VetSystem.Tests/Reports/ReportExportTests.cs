@@ -185,7 +185,7 @@ public sealed class ReportExportTests
                         new FieldVisitMedicationLine(Guid.NewGuid(), "مضاد حيوي", "5مل", 2m,
                             "administered_in_clinic"),
                     ]),
-            ])));
+            ], NextCursor: null)));
 
         yield return ("kpi-summary", ReportDocuments.KpiSummary(new KpiSummaryResponse(
             AsOf: To, VisitsToday: 12, RevenueThisMonth: 9500m, PendingEntitlements: 3, LowStockItems: 5)));

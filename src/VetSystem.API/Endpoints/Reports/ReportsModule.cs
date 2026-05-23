@@ -2,18 +2,22 @@ using VetSystem.API.Entitlements;
 using VetSystem.API.Filters;
 using VetSystem.API.Reports;
 using VetSystem.API.Reports.Export;
+using VetSystem.Application.Common;
 using VetSystem.Application.Ledgers;
 using VetSystem.Application.Reports;
+using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
 
 namespace VetSystem.API.Endpoints.Reports;
 
 /// <summary>
-/// M12 — operational + financial reports (PRD §7.9). Every report is a read-only, environment-scoped,
-/// offset-paged admin table gated at the group level by <see cref="PermissionKey.ReportsRead"/>
-/// (Admin + Accountant by default). Each endpoint takes an optional <c>?format=xlsx|pdf</c>: absent it
-/// returns the typed JSON DTO; otherwise <see cref="ReportExporter"/> streams a generated Arabic/RTL
-/// Excel or PDF file built from the matching <see cref="ReportDocuments"/> mapper (M12 tasks 12–13).
+/// M12 — operational + financial reports (PRD §7.9). The admin reports are gated at the group level by
+/// <see cref="PermissionKey.ReportsRead"/> (Admin + Accountant by default; M12 task 15) and are offset-paged
+/// admin tables, except the feed-like <c>field-doctor-visits</c> log which is cursor-paged (task 16). A
+/// separate auth-only <c>/reports/my-income</c> lets any doctor see <b>their own</b> attributed income
+/// without <see cref="PermissionKey.ReportsRead"/> (task 15, self-scoped to the caller). Each endpoint
+/// takes an optional <c>?format=xlsx|pdf</c>: absent it returns the typed JSON DTO; otherwise
+/// <see cref="ReportExporter"/> streams a generated Arabic/RTL Excel or PDF file (tasks 12–13).
 /// </summary>
 public sealed class ReportsModule : IEndpointModule
 {
@@ -36,6 +40,15 @@ public sealed class ReportsModule : IEndpointModule
         group.MapGet("/field-doctor-visits", FieldDoctorVisits).WithName("Reports_FieldDoctorVisits");
         group.MapGet("/kpi-summary", KpiSummary).WithName("Reports_KpiSummary");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
+
+        // M12 task 15 — doctor self-service. Auth-only (NOT gated on reports.read), self-scoped to the
+        // caller: a field/clinic doctor sees only their own attributed income. Separate group so it
+        // sits outside the admin reports.read gate above.
+        var mine = endpoints.MapGroup("/reports")
+            .RequireAuthorization()
+            .WithTags("Reports");
+
+        mine.MapGet("/my-income", MyIncome).WithName("Reports_MyIncome");
     }
 
     /// <summary>GET /reports/doctor-income — visit count, revenue and calculated share per doctor.</summary>
@@ -51,6 +64,32 @@ public sealed class ReportsModule : IEndpointModule
         string? format,
         CancellationToken cancellationToken)
     {
+        var report = await svc.BuildAsync(from, to, doctorId, visitType, skip, take, cancellationToken);
+        return export.Resolve(format, report, ReportDocuments.DoctorIncome);
+    }
+
+    /// <summary>
+    /// GET /reports/my-income — the calling doctor's own income (M12 task 15). Auth-only and self-scoped:
+    /// reuses the doctor-income report with the doctor fixed to the caller, so no <c>reports.read</c> is
+    /// required and a doctor can never see another doctor's figures.
+    /// </summary>
+    private static async Task<IResult> MyIncome(
+        DoctorIncomeReportService svc,
+        ReportExporter export,
+        ICurrentUserAccessor currentUser,
+        DateOnly? from,
+        DateOnly? to,
+        string? visitType,
+        int? skip,
+        int? take,
+        string? format,
+        CancellationToken cancellationToken)
+    {
+        if (currentUser.UserId is not { } doctorId)
+        {
+            throw new ForbiddenException("unauthenticated", "Authentication required.");
+        }
+
         var report = await svc.BuildAsync(from, to, doctorId, visitType, skip, take, cancellationToken);
         return export.Resolve(format, report, ReportDocuments.DoctorIncome);
     }
@@ -155,19 +194,19 @@ public sealed class ReportsModule : IEndpointModule
         return export.Resolve(format, report, ReportDocuments.InventoryMovement);
     }
 
-    /// <summary>GET /reports/field-doctor-visits — field visit log with services + medications, by doctor.</summary>
+    /// <summary>GET /reports/field-doctor-visits — field visit log (cursor-paged via ?cursor/?limit), by doctor.</summary>
     private static async Task<IResult> FieldDoctorVisits(
         FieldDoctorVisitsReportService svc,
         ReportExporter export,
         DateOnly? from,
         DateOnly? to,
         Guid? doctorId,
-        int? skip,
-        int? take,
+        string? cursor,
+        int? limit,
         string? format,
         CancellationToken cancellationToken)
     {
-        var report = await svc.BuildAsync(from, to, doctorId, skip, take, cancellationToken);
+        var report = await svc.BuildAsync(from, to, doctorId, cursor, limit, cancellationToken);
         return export.Resolve(format, report, ReportDocuments.FieldDoctorVisits);
     }
 

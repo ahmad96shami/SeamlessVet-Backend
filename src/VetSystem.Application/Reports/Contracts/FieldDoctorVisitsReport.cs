@@ -22,12 +22,15 @@ public sealed record FieldVisitRow(
 
 /// <summary>
 /// Field-doctor-visits report (PRD §7.9): the log of field visits (visit_type = field) over a period,
-/// optionally for one doctor, each with the services and medications recorded on it. Newest first;
-/// <see cref="TotalCount"/> is the whole filtered set, <see cref="Rows"/> the requested page.
+/// optionally for one doctor, each with the services and medications recorded on it. Newest first.
+/// As a feed-like long list it is <b>cursor-paginated</b> (M12 task 16): <see cref="Rows"/> is the
+/// requested page and <see cref="NextCursor"/> is the opaque token for the next page (<c>null</c> on
+/// the last page — pass it back as <c>?cursor=</c>). <see cref="TotalCount"/> is the whole filtered set.
 /// </summary>
 public sealed record FieldDoctorVisitsReportResponse(
     DateOnly? From,
     DateOnly? To,
     Guid? DoctorId,
     int TotalCount,
-    IReadOnlyList<FieldVisitRow> Rows);
+    IReadOnlyList<FieldVisitRow> Rows,
+    string? NextCursor);

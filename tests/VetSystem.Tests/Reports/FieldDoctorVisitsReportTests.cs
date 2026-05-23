@@ -85,7 +85,7 @@ public sealed class FieldDoctorVisitsReportTests
             "Bearer", factory.Services.GetRequiredService<IJwtTokenService>()
                 .IssueAccessToken(new UserPrincipal(admin.Id, admin.EnvironmentId, "admin")).Token);
 
-        var resp = await client.GetAsync($"/reports/field-doctor-visits?doctorId={admin.Id}&take=200");
+        var resp = await client.GetAsync($"/reports/field-doctor-visits?doctorId={admin.Id}&limit=200");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var report = (await resp.Content.ReadFromJsonAsync<FieldDoctorVisitsReportResponse>())!;
 
