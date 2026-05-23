@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 using VetSystem.API.Identity;
+using VetSystem.Application.Common;
 
 namespace VetSystem.Tests.Infrastructure;
 
@@ -41,6 +43,13 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
     public string? R2SecretKey { get; init; }
     public string? R2Bucket { get; init; }
 
+    /// <summary>
+    /// Optional <see cref="IClock"/> override. Set to a <c>FakeClock</c> to drive the M11 Hangfire
+    /// jobs (vaccination reminders etc.) at a forced "today" without touching the wall clock. Replaces
+    /// the registered <c>SystemClock</c> for the whole host when set.
+    /// </summary>
+    public IClock? Clock { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Test");
@@ -68,6 +77,12 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
 
         builder.ConfigureServices(services =>
         {
+            if (Clock is not null)
+            {
+                services.RemoveAll<IClock>();
+                services.AddSingleton(Clock);
+            }
+
             services.PostConfigure<JwtOptions>(opts =>
             {
                 opts.Issuer = TestJwtIssuer;
