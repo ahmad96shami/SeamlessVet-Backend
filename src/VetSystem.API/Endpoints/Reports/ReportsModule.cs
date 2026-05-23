@@ -25,6 +25,7 @@ public sealed class ReportsModule : IEndpointModule
 
         group.MapGet("/doctor-income", DoctorIncome).WithName("Reports_DoctorIncome");
         group.MapGet("/clinic-profits", ClinicProfits).WithName("Reports_ClinicProfits");
+        group.MapGet("/profit-per-batch", ProfitPerBatch).WithName("Reports_ProfitPerBatch");
         group.MapGet("/farm-account-status", FarmAccountStatus).WithName("Reports_FarmAccountStatus");
         group.MapGet("/doctor-entitlements", DoctorEntitlements).WithName("Reports_DoctorEntitlements");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
@@ -53,6 +54,16 @@ public sealed class ReportsModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var report = await svc.BuildAsync(from, to, cancellationToken);
+        return TypedResults.Ok(report);
+    }
+
+    /// <summary>GET /reports/profit-per-batch — revenue/cost, drug profit, doctor &amp; clinic share, partner split.</summary>
+    private static async Task<IResult> ProfitPerBatch(
+        ProfitPerBatchReportService svc,
+        Guid batchId,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(batchId, cancellationToken);
         return TypedResults.Ok(report);
     }
 

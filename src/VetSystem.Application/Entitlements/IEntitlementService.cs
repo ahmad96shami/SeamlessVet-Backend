@@ -20,4 +20,36 @@ public interface IEntitlementService
     /// <summary>System B direct fee from the visit's standalone exam-fee invoice(s). Returns null when
     /// the visit has no exam-fee basis (nothing to credit).</summary>
     Task<DoctorEntitlement?> ComputeForVisitAsync(Guid visitId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The full drug-profit accounting for a batch <b>without persisting</b> — built from the exact
+    /// same inputs <see cref="ComputeForBatchAsync"/> uses (effective invoices, contract-resolved
+    /// sale values, cost snapshots, exam-fee model, toggle, System A/B). The profit-per-batch report
+    /// (M12 tasks 4/17) consumes this so its doctor/clinic split reconciles to the persisted
+    /// entitlement to the cent. Throws <see cref="VetSystem.Domain.Common.NotFoundException"/> when the
+    /// batch does not exist.
+    /// </summary>
+    Task<BatchEntitlementBreakdown> ExplainForBatchAsync(Guid batchId, CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// The drug-profit accounting for one batch (PRD §7.4, §7.9). <see cref="DoctorShare"/> equals the
+/// computed <see cref="DoctorEntitlement.ComputedAmount"/> for the batch. <see cref="ClinicShare"/> is
+/// the drug profit the clinic keeps: under System A it is <c>DrugProfit − DoctorShare</c> (the doctor's
+/// share comes out of drug profit); under System B or when the toggle is disabled it is the whole
+/// <c>DrugProfit</c> (the doctor's fee, if any, is paid separately — not out of drug profit).
+/// </summary>
+public sealed record BatchEntitlementBreakdown(
+    Guid BatchId,
+    Guid DoctorId,
+    Guid CustomerId,
+    DateOnly? EndDate,
+    string System,
+    bool Enabled,
+    decimal Revenue,
+    decimal DrugCost,
+    decimal DrugProfit,
+    decimal ExamFee,
+    decimal DoctorShare,
+    decimal? CeilingApplied,
+    decimal ClinicShare);

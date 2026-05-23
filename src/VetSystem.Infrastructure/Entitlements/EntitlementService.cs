@@ -49,26 +49,43 @@ public sealed class EntitlementService : IEntitlementService
 
     public async Task<DoctorEntitlement> ComputeForBatchAsync(Guid batchId, CancellationToken cancellationToken)
     {
+        var breakdown = await ExplainForBatchAsync(batchId, cancellationToken);
+
+        return await UpsertAsync(
+            e => e.BatchId == batchId,
+            breakdown.DoctorId,
+            batchId: batchId,
+            visitId: null,
+            breakdown.System,
+            new EntitlementAmount(breakdown.DoctorShare, breakdown.CeilingApplied),
+            cancellationToken);
+    }
+
+    public async Task<BatchEntitlementBreakdown> ExplainForBatchAsync(Guid batchId, CancellationToken cancellationToken)
+    {
         var batch = await _db.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == batchId, cancellationToken)
                     ?? throw new NotFoundException("batch", batchId);
 
         var (effectiveInvoices, productItems) = await LoadEffectiveInvoicesAsync(
             i => i.BatchId == batchId, cancellationToken);
-        var invoiceTotal = effectiveInvoices.Values.Sum(i => i.Total);
+        var revenue = effectiveInvoices.Values.Sum(i => i.Total);
 
         // sale_value (task 6): the contract-overridden price where an active contract applies on the
         // invoice date, else the line's snapshotted unit_price. cost is the line's cost_price snapshot.
         var lines = new List<DrugProfitLine>(productItems.Count);
+        var drugCost = 0m;
         foreach (var item in productItems)
         {
             var asOf = DateOnly.FromDateTime(effectiveInvoices[item.InvoiceId].IssuedAt.UtcDateTime);
             var resolved = await _pricing.ResolveUnitPriceAsync(item.ProductId!.Value, batch.CustomerId, asOf, cancellationToken);
             var saleValue = resolved.IsContractPrice ? resolved.UnitPrice : item.UnitPrice;
             lines.Add(new DrugProfitLine(saleValue, item.CostPrice, item.Quantity));
+            drugCost += item.CostPrice * item.Quantity;
         }
+        var drugProfit = lines.Sum(l => (l.SaleValue - l.Cost) * l.Quantity);
 
         var examFee = _examFees.For(batch.SupervisionFeeModel)
-            .Calculate(new ExamFeeBasis(batch.SupervisionFeeValue, batch.AnimalCount, invoiceTotal));
+            .Calculate(new ExamFeeBasis(batch.SupervisionFeeValue, batch.AnimalCount, revenue));
 
         var enabled = _toggle.IsEnabled(batch.EntitlementEnabled, await GlobalToggleAsync(cancellationToken));
 
@@ -94,14 +111,26 @@ public sealed class EntitlementService : IEntitlementService
             };
         }
 
-        return await UpsertAsync(
-            e => e.BatchId == batchId,
+        // Under System A the doctor's share comes out of drug profit, so the clinic keeps the rest;
+        // under System B / when disabled the doctor's fee is paid separately, so the clinic keeps all of it.
+        var clinicShare = system == EntitlementSystem.DrugProfit
+            ? drugProfit - amount.ComputedAmount
+            : drugProfit;
+
+        return new BatchEntitlementBreakdown(
+            batchId,
             batch.ResponsibleDoctorId,
-            batchId: batchId,
-            visitId: null,
+            batch.CustomerId,
+            batch.EndDate,
             system,
-            amount,
-            cancellationToken);
+            enabled,
+            revenue,
+            drugCost,
+            drugProfit,
+            examFee,
+            amount.ComputedAmount,
+            amount.CeilingApplied,
+            clinicShare);
     }
 
     public async Task<DoctorEntitlement?> ComputeForVisitAsync(Guid visitId, CancellationToken cancellationToken)
