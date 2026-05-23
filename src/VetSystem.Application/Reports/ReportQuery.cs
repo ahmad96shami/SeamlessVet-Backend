@@ -29,12 +29,7 @@ public static class ReportQuery
     /// </exception>
     public static (DateTimeOffset Start, DateTimeOffset End) ResolveWindow(DateOnly? from, DateOnly? to)
     {
-        if (from is { } f && to is { } t && f > t)
-        {
-            throw new ConflictException(
-                "invalid_period",
-                $"The period start {f:yyyy-MM-dd} is after the end {t:yyyy-MM-dd}.");
-        }
+        EnsureValidPeriod(from, to);
 
         var start = from is { } ff
             ? new DateTimeOffset(ff.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)
@@ -44,6 +39,38 @@ public static class ReportQuery
             : DateTimeOffset.MaxValue;
 
         return (start, end);
+    }
+
+    /// <summary>
+    /// Converts a <c>[from, to]</c> day range to the <b>inclusive</b> instant bounds an entry-by-entry
+    /// query expects (e.g. the ledger statement, filtered <c>CreatedAt &gt;= From &amp;&amp; &lt;= To</c>):
+    /// <c>From</c> is 00:00 on <paramref name="from"/>; <c>To</c> is the last instant of the
+    /// <paramref name="to"/> day. Either side stays <c>null</c> (open-ended) when unset.
+    /// </summary>
+    /// <exception cref="ConflictException">Code <c>invalid_period</c> when <paramref name="from"/> &gt; <paramref name="to"/>.</exception>
+    public static (DateTimeOffset? From, DateTimeOffset? To) ResolveStatementBounds(DateOnly? from, DateOnly? to)
+    {
+        EnsureValidPeriod(from, to);
+
+        DateTimeOffset? fromInstant = from is { } ff
+            ? new DateTimeOffset(ff.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero)
+            : null;
+        DateTimeOffset? toInstant = to is { } tt
+            ? new DateTimeOffset(tt.AddDays(1).ToDateTime(TimeOnly.MinValue), TimeSpan.Zero).AddTicks(-1)
+            : null;
+
+        return (fromInstant, toInstant);
+    }
+
+    /// <summary>Rejects an inverted period (<paramref name="from"/> &gt; <paramref name="to"/>) with <c>invalid_period</c>.</summary>
+    public static void EnsureValidPeriod(DateOnly? from, DateOnly? to)
+    {
+        if (from is { } f && to is { } t && f > t)
+        {
+            throw new ConflictException(
+                "invalid_period",
+                $"The period start {f:yyyy-MM-dd} is after the end {t:yyyy-MM-dd}.");
+        }
     }
 
     /// <summary>Non-negative row offset (defaults to 0).</summary>

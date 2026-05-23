@@ -97,4 +97,55 @@ public sealed class ReportQueryTests
     {
         ReportQuery.ClampSkip(skip).Should().Be(expected);
     }
+
+    [Fact]
+    public void EnsureValidPeriod_FromAfterTo_Throws()
+    {
+        var act = () => ReportQuery.EnsureValidPeriod(Jan31, Jan1);
+
+        act.Should().Throw<ConflictException>().Which.Code.Should().Be("invalid_period");
+    }
+
+    [Theory]
+    [InlineData(true, true)]   // both set, ordered
+    [InlineData(true, false)]  // only from
+    [InlineData(false, true)]  // only to
+    [InlineData(false, false)] // neither
+    public void EnsureValidPeriod_OrderedOrOpenEnded_DoesNotThrow(bool hasFrom, bool hasTo)
+    {
+        var from = hasFrom ? Jan1 : (DateOnly?)null;
+        var to = hasTo ? Jan31 : (DateOnly?)null;
+
+        var act = () => ReportQuery.EnsureValidPeriod(from, to);
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void ResolveStatementBounds_BothUnset_AreNull()
+    {
+        var (from, to) = ReportQuery.ResolveStatementBounds(null, null);
+
+        from.Should().BeNull();
+        to.Should().BeNull();
+    }
+
+    [Fact]
+    public void ResolveStatementBounds_BothSet_AreInclusiveDayBounds()
+    {
+        var (from, to) = ReportQuery.ResolveStatementBounds(Jan1, Jan31);
+
+        from.Should().Be(new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero));
+        // Inclusive upper bound: the last instant of the `to` day (so `<= to` covers all of it).
+        to.Should().Be(new DateTimeOffset(2026, 2, 1, 0, 0, 0, TimeSpan.Zero).AddTicks(-1));
+        to!.Value.Date.Should().Be(new DateTime(2026, 1, 31));
+    }
+
+    [Fact]
+    public void ResolveStatementBounds_FromAfterTo_IsRejected()
+    {
+        var act = () => ReportQuery.ResolveStatementBounds(Jan31, Jan1);
+
+        act.Should().Throw<ConflictException>().Which.Code.Should().Be("invalid_period");
+    }
 }
