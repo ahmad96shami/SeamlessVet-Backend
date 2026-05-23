@@ -43,6 +43,13 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<StockItem> StockItems => Set<StockItem>();
     public DbSet<InventoryMovement> InventoryMovements => Set<InventoryMovement>();
 
+    public DbSet<Visit> Visits => Set<Visit>();
+    public DbSet<Procedure> Procedures => Set<Procedure>();
+    public DbSet<Prescription> Prescriptions => Set<Prescription>();
+    public DbSet<DailyFollowUp> DailyFollowUps => Set<DailyFollowUp>();
+    public DbSet<Vaccination> Vaccinations => Set<Vaccination>();
+    public DbSet<Attachment> Attachments => Set<Attachment>();
+
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
     /// <see cref="Guid.Empty"/> when unauthenticated, which deliberately matches no row.

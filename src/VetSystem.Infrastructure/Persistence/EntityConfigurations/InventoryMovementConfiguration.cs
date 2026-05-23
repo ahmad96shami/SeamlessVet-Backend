@@ -52,7 +52,11 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
             .HasForeignKey(m => m.PerformedBy)
             .OnDelete(DeleteBehavior.Restrict);
 
-        // Note: visit_id / invoice_id FK targets are added by M5 / M7 when those tables come
-        // online — the columns exist here so the source can be set as soon as those endpoints post.
+        // M5 wires the visit_id FK now that `visits` exists — a prescription administered in-clinic
+        // posts a sale_deduct movement tagged with its visit. invoice_id stays unconstrained until M7.
+        builder.HasOne<Visit>()
+            .WithMany()
+            .HasForeignKey(m => m.VisitId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -303,6 +303,12 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              attachments,
+              vaccinations,
+              daily_follow_ups,
+              prescriptions,
+              procedures,
+              visits,
               inventory_movements,
               stock_items,
               field_inventories,
@@ -343,13 +349,15 @@ public sealed class DataSeeder
                 PermissionKey.CustomersWrite,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
-            // M5/M7/M8 will append clinic/field/POS/contract permissions as their milestones land.
+            // M7/M8 will append POS/contract permissions as their milestones land.
             // M3: vet roles get customers.write so field doctors can author customers offline via
             // /sync/customers; the sync handler additionally restricts assigned_doctor_id writes.
-            [RoleKey.VetClinic] = [PermissionKey.CustomersWrite],
-            [RoleKey.VetField] = [PermissionKey.CustomersWrite],
-            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite],
-            [RoleKey.Receptionist] = [PermissionKey.CustomersWrite],
+            // M5: clinical roles get medical.write for the dedicated visit/medical endpoints; the
+            // receptionist gets it too since they open visits at reception (PRD §3).
+            [RoleKey.VetClinic] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite],
+            [RoleKey.VetField] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite],
+            [RoleKey.VetBoth] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite],
+            [RoleKey.Receptionist] = [PermissionKey.CustomersWrite, PermissionKey.MedicalWrite],
             [RoleKey.Cashier] = Array.Empty<string>(),
         };
 
@@ -374,6 +382,7 @@ public sealed class DataSeeder
         PermissionKey.SettingsWrite => "Edit environment-level system settings.",
         PermissionKey.CatalogWrite => "Create, edit, and remove products and services in the catalog.",
         PermissionKey.CustomersWrite => "Create, edit, and remove customers, pets, and ledger entries.",
+        PermissionKey.MedicalWrite => "Create and edit visits, procedures, prescriptions, follow-ups, vaccinations, and attachments.",
         PermissionKey.ContractsActivate => "Promote draft contracts to active.",
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
