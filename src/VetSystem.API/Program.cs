@@ -67,6 +67,14 @@ builder.Services.AddScoped<VetSystem.API.Pets.PetsService>();
 builder.Services.AddScoped<VetSystem.Application.Ledgers.ILedgerService,
     VetSystem.Infrastructure.Ledgers.LedgerService>();
 
+// M4 — inventory (warehouse + field), delta-only append-only movements
+builder.Services.AddSingleton<IDomainEventPublisher,
+    VetSystem.Infrastructure.Messaging.InMemoryDomainEventPublisher>();
+builder.Services.AddSingleton<VetSystem.Application.Inventory.IMovementTranslator,
+    VetSystem.Application.Inventory.MovementTranslator>();
+builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryService,
+    VetSystem.Infrastructure.Inventory.InventoryService>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
