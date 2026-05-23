@@ -303,6 +303,7 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              doctor_entitlements,
               payments,
               invoice_items,
               receipt_vouchers,
@@ -357,6 +358,7 @@ public sealed class DataSeeder
                 PermissionKey.CustomersWrite,
                 PermissionKey.ContractsWrite,
                 PermissionKey.ContractsActivate,
+                PermissionKey.EntitlementsApprove,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -407,6 +409,7 @@ public sealed class DataSeeder
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
         PermissionKey.InventoryAdjust => "Apply inventory adjustments.",
+        PermissionKey.EntitlementsApprove => "Close customer accounts and approve/pay doctor entitlements.",
         PermissionKey.ReportsRead => "View operational and financial reports.",
         _ => key,
     };

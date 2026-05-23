@@ -46,6 +46,9 @@ public static class PermissionKey
     // Inventory (M4)
     public const string InventoryAdjust = "inventory.adjust";
 
+    // Doctor entitlements & settlement (M9)
+    public const string EntitlementsApprove = "entitlements.approve";
+
     // Reporting (M12)
     public const string ReportsRead = "reports.read";
 
@@ -59,6 +62,7 @@ public static class PermissionKey
         ContractsWrite, ContractsActivate,
         InvoicesWrite, InvoicesRefund, InvoicesVoid,
         InventoryAdjust,
+        EntitlementsApprove,
         ReportsRead,
     ];
 }
