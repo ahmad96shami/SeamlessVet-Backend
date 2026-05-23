@@ -188,6 +188,13 @@ builder.Services.AddScoped<VetSystem.API.Reports.FieldDoctorVisitsReportService>
 builder.Services.AddScoped<VetSystem.API.Reports.KpiSummaryReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.UpcomingVaccinationsReportService>();
 
+// M12 tasks 12–13 — report export (?format=xlsx|pdf). Renderers are stateless and thread-safe, so they
+// are singletons; the exporter picks JSON vs. a generated file. ClosedXML and QuestPDF each live in
+// exactly one renderer (VetSystem.API.Reports.Export).
+builder.Services.AddSingleton<VetSystem.API.Reports.Export.ReportExcelRenderer>();
+builder.Services.AddSingleton<VetSystem.API.Reports.Export.ReportPdfRenderer>();
+builder.Services.AddSingleton<VetSystem.API.Reports.Export.ReportExporter>();
+
 builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();

@@ -17,6 +17,7 @@
 
   <ItemGroup>
     <PackageReference Include="BCrypt.Net-Next" Version="4.2.0" />
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="FluentValidation" Version="12.1.1" />
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.23" />
     <PackageReference Include="Hangfire.PostgreSql" Version="1.21.1" />
@@ -26,10 +27,18 @@
       <PrivateAssets>all</PrivateAssets>
     </PackageReference>
     <PackageReference Include="NSwag.AspNetCore" Version="14.7.1" />
+    <PackageReference Include="QuestPDF" Version="2025.5.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Serilog.Sinks.Seq" Version="9.1.0" />
     <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.18.0" />
+  </ItemGroup>
+
+  <!-- Arabic font embedded for the QuestPDF report exporter (M12 task 13) so RTL Arabic renders
+       without depending on system-installed fonts. Noto Sans Arabic, SIL OFL 1.1 — see Fonts/NOTICE.md. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Reports/Export/Fonts/NotoSansArabic-Regular.ttf" />
+    <EmbeddedResource Include="Reports/Export/Fonts/NotoSansArabic-Bold.ttf" />
   </ItemGroup>
 
 </Project>
