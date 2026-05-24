@@ -241,7 +241,11 @@ if (hangfireEnabled)
         .UseRecommendedSerializerSettings()
         .UsePostgreSqlStorage(o => o.UseNpgsqlConnection(hangfireConnection)));
 
-    builder.Services.AddHangfireServer(o => o.WorkerCount = 1);
+    // Single in-process worker per TECH_STACK ("Backend API + Hangfire" is one component, no Redis
+    // backplane). Tunable via Hangfire:WorkerCount so ops can scale the worker without a code change
+    // (M14 RUNBOOK "scale Hangfire worker"); defaults to 1. Keep it modest on a single VPS.
+    var hangfireWorkerCount = builder.Configuration.GetValue<int?>("Hangfire:WorkerCount") ?? 1;
+    builder.Services.AddHangfireServer(o => o.WorkerCount = Math.Max(1, hangfireWorkerCount));
 }
 
 builder.Services.AddApplication();
