@@ -40,13 +40,14 @@ Environment: ☐ staging ☐ production   Date: __________   Operator: _________
 
 ## 3. PowerSync (mobile read path)
 
-> ⚠️ **Currently blocked** by invalid `sync-rules.yaml` (JOINs). See `RUNBOOK.md` → Known issues. These
-> boxes **cannot pass until that is fixed** — do not launch the mobile client until they do.
+> Sync rules are JOIN-free (parameter buckets + denormalized scope keys, M14) and validated to load.
+> Confirm the live behavior here before shipping the mobile client.
 
 - [ ] Replication slot present + active: `pg_replication_slots` shows one `pgoutput` slot, `active=t`.
-- [ ] PowerSync logs show `Service started` with no `Fatal error`.
+- [ ] PowerSync logs show `Service started` with no `Fatal error` / `Must SELECT from a single table`.
 - [ ] A device for doctor *D* syncs only *D*'s assigned customers/visits/inventory (per-doctor scoping)
-      and **no** other doctor's rows.
+      and **no** other doctor's rows — including the deep tables (ledger_entries, invoice_items,
+      payments, vaccinations) whose scope keys are trigger-derived.
 
 ## 4. Logs & monitoring
 

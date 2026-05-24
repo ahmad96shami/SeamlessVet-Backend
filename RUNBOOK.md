@@ -5,10 +5,9 @@ Operating the production backend stack on a single VPS with Docker Compose. Comp
 `scripts/pg_dump_to_r2.sh`, `scripts/restore_from_r2.sh`, and `LAUNCH_CHECKLIST.md`.
 
 > **Status note (read first).** The deploy / migrate / backup / restore paths below were validated by a
-> full local bring-up of `docker-compose.prod.yaml`. The **PowerSync mobile read path is currently
-> blocked** by an invalid `sync-rules.yaml` (JOINs are not allowed — see
-> [Known issues](#known-issues--pre-launch-blockers)). The API, sync **write** path, jobs, and database
-> backups are unaffected. Resolve that blocker before the mobile client can sync.
+> full local bring-up of `docker-compose.prod.yaml`, and the PowerSync mobile read path now loads
+> cleanly (sync rules were reworked JOIN-free — see [Known issues](#known-issues--pre-launch-blockers)).
+> Sentry crash reporting (M13 task 8) is still deferred — wire it before launch.
 
 ---
 
@@ -309,7 +308,7 @@ If the slot is **missing**, the usual causes (in order seen during bring-up):
 |---|---|---|
 | `Config file path /app/onfig … does not exist` | `-config` flag parsed as `-c onfig` by the runner's arg parser. | Use `POWERSYNC_CONFIG_PATH` env (already set in compose), not `-config`. |
 | `Fatal error SSL required but not supported` (`PgError.nossl`) | Driver wants TLS; internal PG has none. | `sslmode: disable` on **both** the replication connection and `storage` in `powersync/config.yaml` (already set). The driver ignores `?sslmode` in the URI. |
-| `Must SELECT from a single table` | `sync-rules.yaml` uses JOINs. | **Pre-launch blocker — see below.** |
+| `Must SELECT from a single table` | a `sync-rules.yaml` data query uses a JOIN. | Rules are JOIN-free as of M14 (parameter buckets + denormalized scope keys). If it recurs, a new query reintroduced a JOIN — re-express it via a bucket parameter. |
 | publication missing | data volume pre-existed, so `db-init` didn't run | `dc exec -T postgres psql -U vet -d vet -c "CREATE PUBLICATION powersync FOR ALL TABLES;"` then restart powersync. |
 | `client_auth.jwks_uri` unreachable | API not healthy yet | ensure `api` is healthy (`dc ps`); powersync reaches it at `http://api:8080/.well-known/jwks.json` on the compose network. |
 
@@ -324,13 +323,12 @@ If the slot is **missing**, the usual causes (in order seen during bring-up):
 
 ## Known issues & pre-launch blockers
 
-1. **PowerSync sync rules use JOINs → invalid (blocks the mobile read path).**
-   `powersync/sync-rules.yaml` scopes child tables with `JOIN` (e.g. `SELECT pets.* FROM pets JOIN
-   customers …`). PowerSync requires every data query to **select from a single table**; it rejects the
-   rules with `Must SELECT from a single table`, so no slot/buckets are produced. This pre-dates M14 (the
-   container never started before — the `-config` bug masked it). **Fix is a sync-rules redesign** (bucket
-   parameter queries, likely with denormalized scope columns such as `assigned_doctor_id` on child
-   tables — which may mean new migrations). Tracked as follow-up; **not** an M14 deployment-artifact
-   issue. The API + sync **write** path + jobs + backups work without it.
+1. **PowerSync sync-rules JOINs — RESOLVED (M14).** `powersync/sync-rules.yaml` originally scoped child
+   tables with JOINs, which PowerSync rejects (`Must SELECT from a single table`). It was reworked into
+   **parameter-query buckets** (`doctor`, `by_customer`, `by_visit`, `by_field_inventory`, `by_contract`),
+   and the three append-only tables 2+ levels deep (`ledger_entries`, `invoice_items`, `payments`) plus
+   `vaccinations` carry a **denormalized scope key** kept correct by BEFORE INSERT/UPDATE triggers
+   (migration `M14_SyncScopeDenormalization`). Validated: the rules load cleanly, the slot is active, and
+   the trigger/scoping behavior is covered by the test suite. Keep new data queries single-table.
 2. **Sentry not yet wired** (M13 task 8, deferred). `LAUNCH_CHECKLIST.md` currently verifies "Serilog
    clean"; add Sentry before launch for crash/error alerting.
