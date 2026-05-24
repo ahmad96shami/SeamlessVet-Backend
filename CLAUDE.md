@@ -104,3 +104,29 @@ Tuning knobs live in the `RateLimiting:Sync` config section (override via `appse
 | `QueueLimit` | `0` | Requests queued when the bucket is empty (`0` = reject immediately). |
 
 `RateLimiting:Enabled` is the master switch: it defaults **off in the `Test` environment** (so the integration suite is never throttled) and **on** everywhere else; set it explicitly to force either way. The limiter middleware always runs — when disabled, the `sync` policy resolves to a no-op limiter, so it stays transparent. The flag and limits are read **per request** (not at host build) so tests/ops can toggle them without the eager-config pitfall that `VetApiFactory` documents.
+
+### Logging & observability
+
+Serilog, structured + multi-sink (configured in the `Serilog` section of `appsettings.json` + `Program.cs`):
+
+- **Rolling daily file** at `logs/vet-system-.log`, 14 days retained.
+- **Seq** when `Seq:ServerUrl` is set (override via env/user-secrets); unset = file only (dev default).
+- Every event is enriched with `MachineName`, `ThreadId`, `EnvironmentName`; HTTP requests are summarised by `UseSerilogRequestLogging` (method, path, status, elapsed).
+
+**Convention — always use message templates, never string interpolation**, so values land as queryable structured properties:
+
+```csharp
+_logger.LogInformation("Seeded bootstrap environment {EnvironmentId}", environmentId); // queryable
+_logger.LogInformation($"Seeded environment {environmentId}");                          // AVOID
+```
+
+Include the relevant IDs (environment, user, entity) and the operation name as properties. Errors flow through `ExceptionHandlingMiddleware`, which logs unhandled exceptions, concurrency conflicts, and unique-violations with the request path before returning the canonical `{ code, message, fieldErrors? }`.
+
+Operational signals (query in Seq; alert thresholds + a Sentry sink finalize with M13 task 8 / M14):
+
+| Signal | Where | Why |
+|---|---|---|
+| `@Level = 'Error'` | Seq | unhandled errors / 500s |
+| `rate_limited` 429s | Seq (request log) | field-doctor sync-storm pressure (tune `RateLimiting:Sync`) |
+| Job failures | `/hangfire` dashboard (Admin-gated) | reminders / alerts / report delivery health |
+| `/health/ready` `status` | uptime monitor | `degraded` ⇒ Hangfire or PowerSync slot down; `503` ⇒ DB unreachable |
