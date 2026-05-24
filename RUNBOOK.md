@@ -193,16 +193,23 @@ On restore the schema + data come back intact; **PowerSync re-attaches its repli
 automatically** on next start (the publication is restored with the dump; the slot is recreated by the
 service). No manual surgery required.
 
-### Restore-drill result (validated locally)
+### Restore-drill result
 
-Dump → drop/recreate → restore round-tripped in **~2 s** on a freshly-seeded DB (40 tables, all seed
-rows verified equal to the source). On the VPS, re-run the drill against a representative dataset and
-**record the wall-clock time here** as part of launch sign-off (target: a clean VPS to working state in
-under 1 hour — `LAUNCH_CHECKLIST.md`).
+A full disaster-recovery drill was run locally against the prod compose stack, swapping R2 for a MinIO
+(S3-compatible) container so the **actual** `pg_dump_to_r2.sh` / `restore_from_r2.sh` were exercised:
+`pg_dump_to_r2.sh` → object in the bucket → `docker compose down -v` (total loss) → fresh Postgres →
+`restore_from_r2.sh --latest` → `up api powersync`. Result: data intact, the `powersync` publication
+came back **with the dump** (no manual recreate), PowerSync recreated its slot and `/health/ready`
+returned `powersync: ok` — i.e. it resumed without manual surgery. Restore + bring-up: **~12 s** (small
+seeded dataset).
 
-| Date | Dump size | Restore time | By |
-|---|---|---|---|
-| _(record at launch)_ | | | |
+On the VPS, re-run against the **real R2 bucket** and a representative dataset, and record it here as
+part of launch sign-off (target: clean VPS → working state under 1 hour — `LAUNCH_CHECKLIST.md`):
+
+| Date | Store | Dataset | Restore+resume time | By |
+|---|---|---|---|---|
+| 2026-05-24 | MinIO (R2 stand-in, local) | seed only | ~12 s | dev (mechanism check) |
+| _(record at launch)_ | real R2 | representative | | |
 
 ---
 
