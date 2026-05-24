@@ -3,10 +3,10 @@ using FluentAssertions;
 namespace VetSystem.Tests.Contracts;
 
 /// <summary>
-/// M8 task 13 — confirms <c>powersync/sync-rules.yaml</c> extends the <c>doctor_scope</c> bucket with
-/// the contracts the doctor is responsible for, those contracts' medication-price overrides (via the
-/// contract FK chain), and the doctor's batches — so a field doctor pulls their own contracts/batches
-/// without leaking another doctor's rows (PRD §8.6).
+/// M8 task 13 / M14 — confirms <c>powersync/sync-rules.yaml</c> scopes contracts + batches to the
+/// responsible doctor (the <c>doctor</c> bucket) and the contracts' medication-price overrides to their
+/// parent contract via the <c>by_contract</c> parameter bucket (PowerSync forbids JOINs) — so a field
+/// doctor pulls their own contracts/batches without leaking another doctor's rows (PRD §8.6).
 /// </summary>
 public sealed class ContractsSyncRulesTests
 {
@@ -16,17 +16,17 @@ public sealed class ContractsSyncRulesTests
         var contents = File.ReadAllText(LocateSyncRulesFile());
 
         contents.Should().MatchRegex(@"FROM\s+contracts",
-            "doctor_scope must sync the doctor's contracts");
+            "must sync the doctor's contracts");
         contents.Should().MatchRegex(@"FROM\s+contract_medication_prices",
-            "doctor_scope must sync contract_medication_prices via the contract FK chain");
+            "must sync contract_medication_prices");
         contents.Should().MatchRegex(@"FROM\s+batches",
-            "doctor_scope must sync the doctor's batches");
+            "must sync the doctor's batches");
 
-        contents.Should().Contain("contracts.responsible_doctor_id = bucket.doctor_id",
+        contents.Should().MatchRegex(@"FROM\s+contracts\s+WHERE\s+responsible_doctor_id\s*=\s*bucket\.doctor_id",
             "contracts are scoped to the responsible doctor");
-        contents.Should().Contain("JOIN contracts ON contract_medication_prices.contract_id = contracts.id",
-            "medication prices follow their parent contract's scope");
-        contents.Should().Contain("batches.responsible_doctor_id = bucket.doctor_id",
+        contents.Should().MatchRegex(@"FROM\s+contract_medication_prices\s+WHERE\s+contract_id\s*=\s*bucket\.contract_id",
+            "medication prices follow their parent contract via the by_contract bucket");
+        contents.Should().MatchRegex(@"FROM\s+batches\s+WHERE\s+responsible_doctor_id\s*=\s*bucket\.doctor_id",
             "batches are scoped to the responsible doctor");
     }
 

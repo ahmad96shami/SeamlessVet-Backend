@@ -38,6 +38,14 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
         builder.HasIndex(e => new { e.LedgerId, e.CreatedAt })
             .HasDatabaseName("ix_ledger_entries_ledger");
 
+        // M14 — denormalized scope key for PowerSync's `by_customer` bucket (its data queries select
+        // from a single table, so the customer must be reachable without a JOIN to ledgers). Kept as a
+        // shadow property so the Domain entity stays free of sync-infra concerns; a BEFORE INSERT
+        // trigger copies the parent ledger's customer_id (see migration M14_SyncScopeDenormalization).
+        // ledger_entries are append-only, so insert-time population is sufficient.
+        builder.Property<Guid?>("CustomerId").HasColumnName("customer_id");
+        builder.HasIndex("CustomerId").HasDatabaseName("ix_ledger_entries_customer");
+
         // M7 — the polymorphic source FK targets now exist. An invoice/exam-fee entry points at the
         // invoice; a receipt-voucher entry points at the voucher. Both stay nullable (an adjustment
         // entry has neither).

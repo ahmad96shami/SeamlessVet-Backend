@@ -30,6 +30,15 @@ internal sealed class InvoiceItemConfiguration : IEntityTypeConfiguration<Invoic
 
         builder.HasIndex(i => i.InvoiceId).HasDatabaseName("ix_invoice_items_invoice");
 
+        // M14 — denormalized scope keys for PowerSync's by_customer / by_visit buckets (single-table
+        // data queries can't JOIN to invoices). Shadow properties kept off the Domain entity; a BEFORE
+        // INSERT trigger copies the parent invoice's customer_id + visit_id (migration
+        // M14_SyncScopeDenormalization). invoice_items are append-only — insert-time population suffices.
+        builder.Property<Guid?>("CustomerId").HasColumnName("customer_id");
+        builder.Property<Guid?>("VisitId").HasColumnName("visit_id");
+        builder.HasIndex("CustomerId").HasDatabaseName("ix_invoice_items_customer");
+        builder.HasIndex("VisitId").HasDatabaseName("ix_invoice_items_visit");
+
         builder.HasOne<Invoice>()
             .WithMany()
             .HasForeignKey(i => i.InvoiceId)

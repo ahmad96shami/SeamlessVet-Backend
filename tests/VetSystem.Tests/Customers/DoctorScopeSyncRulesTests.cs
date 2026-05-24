@@ -7,15 +7,17 @@ using VetSystem.Tests.Infrastructure;
 namespace VetSystem.Tests.Customers;
 
 /// <summary>
-/// M3 task 15 — confirms PowerSync's <c>doctor_scope</c> bucket exposes a doctor's assigned
-/// customers (and their pets / ledger / ledger_entries by FK chain) without leaking
-/// other doctors' rows. Two checks:
+/// M3 task 15 / M14 — confirms PowerSync exposes a doctor's assigned customers (and their pets /
+/// ledger / ledger_entries) without leaking other doctors' rows. PowerSync forbids JOINs, so M14
+/// reworked this into parameter-query buckets: the <c>doctor</c> bucket selects the doctor's own
+/// customers (assigned_doctor_id), and the <c>by_customer</c> bucket — parameterized by those customer
+/// ids — pulls their children by a single-table <c>customer_id = bucket.customer_id</c> filter
+/// (ledger_entries reaching customer_id via the M14 denormalized scope key). Two checks:
 ///
-/// 1. <c>powersync/sync-rules.yaml</c> declares the bucket with the four expected SELECTs
-///    parameterized by <c>users.id = request.user_id()</c>.
-/// 2. Running the same WHERE-clause filter directly against Postgres (what PowerSync's
-///    replication stream would mirror) returns only the rows that belong to the doctor whose
-///    id matches the bucket parameter.
+/// 1. <c>powersync/sync-rules.yaml</c> declares the <c>doctor</c> + <c>by_customer</c> buckets with the
+///    expected parameter queries and single-table (JOIN-free) data filters.
+/// 2. The same scope, evaluated against Postgres (what PowerSync's replication mirrors), returns only
+///    the rows belonging to the doctor whose id matches the bucket parameter.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class DoctorScopeSyncRulesTests
@@ -26,20 +28,23 @@ public sealed class DoctorScopeSyncRulesTests
         var rulesPath = LocateSyncRulesFile();
         var contents = File.ReadAllText(rulesPath);
 
-        contents.Should().Contain("doctor_scope:", "M3 introduces the doctor_scope bucket");
         contents.Should().Contain("request.user_id()", "scoping must be parameterised by the JWT user");
+        contents.Should().Contain("doctor:", "the doctor's own entities live in the `doctor` bucket");
+        contents.Should().Contain("by_customer:", "a customer's children live in the `by_customer` bucket");
 
-        contents.Should().MatchRegex(@"SELECT\s+\*\s+FROM\s+customers",
-            "doctor_scope must select customers assigned to the doctor");
-        contents.Should().MatchRegex(@"FROM\s+pets",
-            "doctor_scope must select pets via the customer FK chain");
-        contents.Should().MatchRegex(@"FROM\s+ledgers",
-            "doctor_scope must select ledgers via the customer FK chain");
-        contents.Should().MatchRegex(@"FROM\s+ledger_entries",
-            "doctor_scope must select ledger_entries via the ledger FK chain");
+        // The doctor bucket selects the doctor's own customers; by_customer is parameterized by them.
+        contents.Should().MatchRegex(@"FROM\s+customers\s+WHERE\s+assigned_doctor_id\s*=\s*bucket\.doctor_id",
+            "the doctor bucket selects customers assigned to the doctor (PRD §8.6)");
+        contents.Should().Contain("assigned_doctor_id = request.user_id()",
+            "by_customer is parameterised by the doctor's assigned customers");
 
-        contents.Should().Contain("assigned_doctor_id = bucket.doctor_id",
-            "rows must be filtered by the assigned doctor (PRD §8.6)");
+        // Children are reached by a single-table filter on the bucket parameter — never a JOIN.
+        contents.Should().MatchRegex(@"FROM\s+pets\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
+            "pets are scoped by the by_customer parameter");
+        contents.Should().MatchRegex(@"FROM\s+ledgers\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
+            "ledgers are scoped by the by_customer parameter");
+        contents.Should().MatchRegex(@"FROM\s+ledger_entries\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
+            "ledger_entries reach customer_id via the M14 denormalized scope key");
     }
 
     [Fact]
@@ -119,6 +124,56 @@ public sealed class DoctorScopeSyncRulesTests
             .ToListAsync();
         entriesForDoctorA.Should().OnlyContain(lid => lid == ledgerA,
             "doctor A's ledger entries must not surface entries from B's ledger");
+    }
+
+    /// <summary>
+    /// M14 — the denormalized scope keys the JOIN-free sync rules depend on are populated server-side by
+    /// BEFORE INSERT/UPDATE triggers, derived from the immutable parent FK. A client-supplied value can
+    /// never widen a row's scope.
+    /// </summary>
+    [Fact]
+    public async Task Triggers_DeriveDenormalizedScopeKeysFromParent()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var doctor = await SeedFieldDoctorAsync(scope, "+97T-" + Guid.NewGuid().ToString("N")[..6]);
+
+        await using var db = scope.CreateDbContext(new FakeCurrentUser
+        {
+            IsAuthenticated = true,
+            EnvironmentId = scope.EnvironmentId,
+            UserId = doctor.Id,
+        });
+        var (customerId, _, entryId) = await SeedCustomerWithChildrenAsync(db, scope.EnvironmentId, doctor.Id);
+
+        // ledger_entries.customer_id (a shadow column) is copied from the parent ledger by the trigger.
+        var entryCustomerId = await db.LedgerEntries.IgnoreQueryFilters()
+            .Where(e => e.Id == entryId)
+            .Select(e => EF.Property<Guid?>(e, "CustomerId"))
+            .FirstAsync();
+        entryCustomerId.Should().Be(customerId,
+            "the BEFORE INSERT trigger copies the parent ledger's customer_id onto ledger_entries");
+
+        // vaccinations.customer_id is forced to the pet's owner even when a bogus value is supplied.
+        var petId = await db.Pets.IgnoreQueryFilters()
+            .Where(p => p.CustomerId == customerId).Select(p => p.Id).FirstAsync();
+        var vaccinationId = Guid.CreateVersion7();
+        db.Vaccinations.Add(new Vaccination
+        {
+            Id = vaccinationId,
+            EnvironmentId = scope.EnvironmentId,
+            PetId = petId,
+            CustomerId = Guid.CreateVersion7(), // deliberately wrong — the trigger must overwrite it
+            VaccineType = "rabies",
+            DateGiven = DateOnly.FromDateTime(DateTime.UtcNow),
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await db.SaveChangesAsync();
+
+        var vaccinationCustomerId = await db.Vaccinations.IgnoreQueryFilters()
+            .Where(v => v.Id == vaccinationId).Select(v => v.CustomerId).FirstAsync();
+        vaccinationCustomerId.Should().Be(customerId,
+            "the trigger derives vaccination.customer_id from the pet's owner, ignoring a client-supplied value");
     }
 
     private static async Task<User> SeedFieldDoctorAsync(PgTestScope scope, string phone)
