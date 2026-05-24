@@ -80,11 +80,15 @@ public sealed record StockLevelResponse(
     string NameAr,
     string? NameLatin,
     string? Barcode,
+    string Category,
+    string? UnitOfMeasure,
     string LocationType,
     Guid LocationId,
     decimal Quantity,
     decimal ReorderPoint,
     DateOnly? ExpirationDate,
+    decimal PurchasePrice,
+    decimal SellingPrice,
     bool BelowReorderPoint);
 
 /// <summary>

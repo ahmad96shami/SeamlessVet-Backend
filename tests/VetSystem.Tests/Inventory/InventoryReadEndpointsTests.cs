@@ -23,8 +23,9 @@ public sealed class InventoryReadEndpointsTests
 {
     private sealed record StockRow(
         Guid ProductId, string NameAr, string? NameLatin, string? Barcode,
-        string LocationType, Guid LocationId, decimal Quantity, decimal ReorderPoint,
-        string? ExpirationDate, bool BelowReorderPoint);
+        string Category, string? UnitOfMeasure, string LocationType, Guid LocationId,
+        decimal Quantity, decimal ReorderPoint, string? ExpirationDate,
+        decimal PurchasePrice, decimal SellingPrice, bool BelowReorderPoint);
 
     private sealed record MovementRow(
         Guid Id, Guid ProductId, string MovementType,
@@ -51,8 +52,12 @@ public sealed class InventoryReadEndpointsTests
         // even though 11 > 10 (a literal reorder compare would NOT flag it).
         all.Single(r => r.ProductId == seed.EnroId && r.LocationType == StockLocation.Warehouse)
             .BelowReorderPoint.Should().BeTrue();
-        all.Single(r => r.ProductId == seed.AmoxId && r.LocationType == StockLocation.Warehouse)
-            .BelowReorderPoint.Should().BeFalse();
+        var amoxWh = all.Single(r => r.ProductId == seed.AmoxId && r.LocationType == StockLocation.Warehouse);
+        amoxWh.BelowReorderPoint.Should().BeFalse();
+        // Enriched from the joined product (the design's stock table shows these columns).
+        amoxWh.Category.Should().Be(ProductCategory.Medication);
+        amoxWh.SellingPrice.Should().Be(9m);
+        amoxWh.UnitOfMeasure.Should().BeNull();
 
         // locationType filter → field only.
         var field = await GetListAsync<StockRow>(client, "/inventory/stock?locationType=field");

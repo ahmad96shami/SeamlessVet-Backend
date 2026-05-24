@@ -81,11 +81,15 @@ public sealed class InventoryReadService
                 x.p.NameAr,
                 x.p.NameLatin,
                 x.p.Barcode,
+                x.p.Category,
+                x.p.UnitOfMeasure,
                 x.s.LocationType,
                 x.s.LocationId,
                 x.s.Quantity,
                 x.p.ReorderPoint,
                 x.p.ExpirationDate,
+                x.p.PurchasePrice,
+                x.p.SellingPrice,
                 x.s.Quantity <= x.p.ReorderPoint * factor))
             .ToListAsync(cancellationToken);
     }
