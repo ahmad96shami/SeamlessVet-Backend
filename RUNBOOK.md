@@ -255,6 +255,25 @@ is the supported path on this single-VPS topology.
 
 ---
 
+## Observability
+
+The **alert thresholds + saved Seq queries are the canonical reference in `vet-backend/CLAUDE.md` →
+Operations → "Dashboards & alert thresholds"** — keep this section a pointer, not a copy. Four surfaces:
+
+- **Sentry (crash/error reporting).** Wired but **OFF until you set a DSN**. Add `Sentry__Dsn` to
+  `.env.prod` (Sentry project → Settings → Client Keys → DSN), then `dc up -d api`; set `Sentry__Release`
+  to the deployed git SHA for per-deploy issue grouping. Captures HTTP 500s + Hangfire job failures with
+  stacks; PII and request bodies are never sent. Alert on new/spiking/regressed issues (see CLAUDE.md).
+- **Seq (structured logs).** Set `Seq__ServerUrl` to your Seq instance (else file-only at `/app/logs` in
+  the `api-logs` volume). Key queries: `@Level='Error'`, `StatusCode=429` (rate-limited syncs),
+  `Elapsed>1000` (slow requests vs. the `loadtests/` baseline).
+- **Hangfire dashboard.** `https://api.<domain>/hangfire` (Admin-gated). Watch the **Failed** tab and
+  that the daily jobs (07:00 UTC) + weekly report (Mon) keep succeeding.
+- **Uptime monitor.** Point it at `/health/ready` (not `/live`): HTTP `503` ⇒ DB down (**page**);
+  `status:"degraded"` ⇒ Hangfire or the PowerSync slot is down.
+
+---
+
 ## Cloudflare setup (DNS + Origin Certificate)
 
 1. **DNS:** add proxied (orange-cloud) records for `api.<domain>` and `sync.<domain>` → the VPS IP.

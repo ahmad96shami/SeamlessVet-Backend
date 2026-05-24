@@ -122,11 +122,52 @@ _logger.LogInformation($"Seeded environment {environmentId}");                  
 
 Include the relevant IDs (environment, user, entity) and the operation name as properties. Errors flow through `ExceptionHandlingMiddleware`, which logs unhandled exceptions, concurrency conflicts, and unique-violations with the request path before returning the canonical `{ code, message, fieldErrors? }`.
 
-Operational signals (query in Seq; alert thresholds + a Sentry sink finalize with M13 task 8 / M14):
+### Sentry (crash/error reporting)
 
-| Signal | Where | Why |
+`Sentry.AspNetCore` + the `Sentry.Serilog` sink (M13 task 8). **Config-driven and OFF until a DSN is set** — `Sentry:Dsn` via `dotnet user-secrets` in dev, the `Sentry__Dsn` env var (`.env.prod`) in prod; an empty DSN skips the SDK and sink entirely (dev/test default).
+
+- **What's captured:** anything Serilog logs at `Error`+ becomes a Sentry event — HTTP 500s (logged by `ExceptionHandlingMiddleware`) **and** Hangfire job failures — with exception + stack. `Information`+ logs become breadcrumbs. Expected domain errors (validation / 404 / 409 / settlement-lock) aren't logged at `Error`, so they never page you.
+- **Tagging:** `environment` = the ASP.NET environment (override `Sentry:Environment`); `release` = the API assembly version (override `Sentry:Release` with the deploy's git SHA/tag for per-deploy grouping).
+- **De-dup:** `Serilog.AspNetCore.RequestLoggingMiddleware` *Error* events (the "responded 500" line) are excluded from Sentry, so one 500 is one issue (the rich `ExceptionHandlingMiddleware` event already carries the HTTP request context via `UseSentry`).
+- **Privacy:** `SendDefaultPii=false` and request bodies are never attached (medical/financial data). `TracesSampleRate` defaults to `0` (errors only); raise `Sentry:TracesSampleRate` to sample performance.
+
+### Dashboards & alert thresholds (M13 task 16)
+
+Four places to watch. Thresholds are starting points for this single-VPS, ~100k-visits/year deployment (PRD §12) — tune to the observed baseline (`loadtests/README.md` has the latency baseline).
+
+**Sentry** — issues + alert rules:
+
+| Alert | Threshold | Action |
 |---|---|---|
-| `@Level = 'Error'` | Seq | unhandled errors / 500s |
-| `rate_limited` 429s | Seq (request log) | field-doctor sync-storm pressure (tune `RateLimiting:Sync`) |
-| Job failures | `/hangfire` dashboard (Admin-gated) | reminders / alerts / report delivery health |
-| `/health/ready` `status` | uptime monitor | `degraded` ⇒ Hangfire or PowerSync slot down; `503` ⇒ DB unreachable |
+| New unresolved issue | first occurrence | low-volume system ⇒ every new error is signal; triage |
+| Spike on one issue | > 10 events / 5 min | a path is failing repeatedly — page |
+| Regression | a resolved issue recurs | reopen; suspect the deploy (use the `release` tag) |
+| Critical-path errors | any from invoices / sync / settlement / entitlements | route to a high-priority channel |
+
+**Seq** — saved queries over the structured logs (all use queryable properties, hence the message-template convention above):
+
+| Query | Healthy baseline | Alert |
+|---|---|---|
+| `@Level = 'Error'` | ~0/hour | > 5/hour, or **any** during a quiet window (also in Sentry) |
+| `StatusCode = 429` (request log) | occasional | sustained > 30/min ⇒ sync storm / bad client; tune `RateLimiting:Sync` |
+| `@Level = 'Warning' and (@Message like '%Concurrency conflict%' or @Message like '%Unique violation%')` | rare | elevated ⇒ write contention / duplicate keys |
+| `Elapsed > 1000` (request log, ms) | rare | repeated on `/sync/*` or `/pos/*` ⇒ latency regression vs. the `loadtests/` baseline |
+
+(Negative-stock attempts aren't a logged error — they surface as M11 in-app notifications to the doctor + Admins.)
+
+**Hangfire** — `/hangfire` dashboard (Admin-gated):
+
+| Signal | Threshold | Action |
+|---|---|---|
+| Jobs in **Failed** | any | investigate (Sentry also captured the exception) |
+| Missed daily job | no success in > 25h — `vaccination-reminders` / `low-stock-alerts` / `expiration-warnings` (07:00 UTC) | check the worker + `IClock` |
+| Missed weekly job | `scheduled-report-delivery` no success in > 8 days (Mon 07:00 UTC) | as above |
+| Retry queue climbing | more than a handful pending | a downstream dependency is down |
+
+**`/health/ready`** — uptime monitor (~1-min interval), shape `{status, checks:{database,hangfire,powersync}}`:
+
+| Response | Meaning | Action |
+|---|---|---|
+| HTTP `503` | DB unreachable | **page** |
+| `status:"degraded"` | Hangfire or the PowerSync replication slot down (RUNBOOK "PowerSync — replication slot") | investigate — jobs/sync stalled, API still serving |
+| `status:"ok"` | database/hangfire/powersync all `ok` | — |

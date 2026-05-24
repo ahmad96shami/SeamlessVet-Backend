@@ -53,8 +53,11 @@ Environment: ☐ staging ☐ production   Date: __________   Operator: _________
 
 - [ ] Serilog clean: no `@Level = 'Error'` noise in `dc logs api` / the `api-logs` volume on a normal
       session.
-- [ ] ☐ **Sentry** wired and quiet — _DEFERRED (M13 task 8); wire before production launch._
-- [ ] Uptime monitor pings `https://api.<domain>/health/ready`.
+- [ ] **Sentry** enabled (`Sentry__Dsn` set in `.env.prod`) and quiet: clean boot, no unexpected issues
+      in the project; `environment` + `release` tags correct. Alert rules per `CLAUDE.md` →
+      "Dashboards & alert thresholds".
+- [ ] Uptime monitor pings `https://api.<domain>/health/ready` (`503` ⇒ DB down; `degraded` ⇒ Hangfire
+      or PowerSync slot down).
 
 ## 5. Backups & restore
 
