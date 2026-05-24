@@ -28,6 +28,12 @@ public sealed record CustomerPatchRequest(
     string? Notes,
     Guid? AssignedDoctorId);
 
+/// <summary>
+/// Customer read projection. <c>Balance</c> and <c>LedgerStatus</c> are joined from the 1:1
+/// <see cref="Ledger"/> (created alongside the customer) so the web list can show account state
+/// at a glance and filter by it, without an N+1 statement call per row. Positive balance = the
+/// customer owes the clinic. These two fields are read-only — the ledger is server-authoritative.
+/// </summary>
 public sealed record CustomerResponse(
     Guid Id,
     string Type,
@@ -39,5 +45,7 @@ public sealed record CustomerResponse(
     string? IdNumber,
     string? Notes,
     Guid? AssignedDoctorId,
+    decimal Balance,
+    string LedgerStatus,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);

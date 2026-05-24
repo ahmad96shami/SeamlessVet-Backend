@@ -33,6 +33,7 @@ public sealed class CustomersService
         string? search,
         string? type,
         Guid? assignedDoctorId,
+        string? ledgerStatus,
         int? skip,
         int? take,
         CancellationToken cancellationToken)
@@ -42,12 +43,17 @@ public sealed class CustomersService
             throw new ConflictException("invalid_customer_type", $"type '{type}' is not valid.");
         }
 
-        var query = _db.Customers.AsNoTracking();
+        if (ledgerStatus is not null && !LedgerStatus.All.Contains(ledgerStatus))
+        {
+            throw new ConflictException("invalid_ledger_status", $"ledgerStatus '{ledgerStatus}' is not valid.");
+        }
+
+        var customers = _db.Customers.AsNoTracking();
 
         if (!string.IsNullOrWhiteSpace(search))
         {
             var pattern = $"%{search.Trim()}%";
-            query = query.Where(c =>
+            customers = customers.Where(c =>
                 EF.Functions.ILike(c.FullName, pattern) ||
                 (c.PhonePrimary != null && EF.Functions.ILike(c.PhonePrimary, pattern)) ||
                 (c.IdNumber != null && EF.Functions.ILike(c.IdNumber, pattern)));
@@ -55,21 +61,29 @@ public sealed class CustomersService
 
         if (type is not null)
         {
-            query = query.Where(c => c.Type == type);
+            customers = customers.Where(c => c.Type == type);
         }
 
         if (assignedDoctorId is { } doctorId)
         {
-            query = query.Where(c => c.AssignedDoctorId == doctorId);
+            customers = customers.Where(c => c.AssignedDoctorId == doctorId);
         }
 
-        var rows = await query
+        // Filter by the 1:1 ledger's status via a correlated subquery, so ordering + paging stay on
+        // the customer entity (which EF translates cleanly — projecting the entity into a wrapper and
+        // then composing OrderBy/Skip/Take on top does not).
+        if (ledgerStatus is { } status)
+        {
+            customers = customers.Where(c => _db.Ledgers.Any(l => l.CustomerId == c.Id && l.Status == status));
+        }
+
+        var page = await customers
             .OrderBy(c => c.FullName)
             .Skip(Math.Max(0, skip ?? 0))
             .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
             .ToListAsync(cancellationToken);
 
-        return rows.Select(_mapper.Map<CustomerResponse>).ToList();
+        return await EnrichAsync(page, cancellationToken);
     }
 
     public async Task<CustomerResponse> GetAsync(Guid id, CancellationToken cancellationToken)
@@ -79,8 +93,37 @@ public sealed class CustomersService
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken)
             ?? throw new NotFoundException("customer", id);
 
-        return _mapper.Map<CustomerResponse>(customer);
+        var ledger = await _db.Ledgers.AsNoTracking()
+            .FirstOrDefaultAsync(l => l.CustomerId == id, cancellationToken);
+
+        return ToResponse(customer, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
     }
+
+    /// <summary>Loads the 1:1 ledger balance + status for a page of customers in a single query.</summary>
+    private async Task<IReadOnlyList<CustomerResponse>> EnrichAsync(
+        IReadOnlyList<Customer> customers,
+        CancellationToken cancellationToken)
+    {
+        if (customers.Count == 0)
+        {
+            return [];
+        }
+
+        var ids = customers.Select(c => c.Id).ToList();
+        var ledgers = await _db.Ledgers.AsNoTracking()
+            .Where(l => ids.Contains(l.CustomerId))
+            .ToDictionaryAsync(l => l.CustomerId, cancellationToken);
+
+        return customers.Select(c =>
+        {
+            ledgers.TryGetValue(c.Id, out var ledger);
+            return ToResponse(c, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
+        }).ToList();
+    }
+
+    /// <summary>Maps the base customer fields via Mapster, then layers on the joined ledger state.</summary>
+    private CustomerResponse ToResponse(Customer customer, decimal balance, string ledgerStatus) =>
+        _mapper.Map<CustomerResponse>(customer) with { Balance = balance, LedgerStatus = ledgerStatus };
 
     public async Task<CustomerResponse> CreateAsync(CustomerRequest request, CancellationToken cancellationToken)
     {
@@ -133,7 +176,8 @@ public sealed class CustomersService
                 "A customer with this primary phone already exists in this environment.");
         }
 
-        return _mapper.Map<CustomerResponse>(entity);
+        // The ledger was created in the same transaction above — balance 0, status open.
+        return ToResponse(entity, ledger.Balance, ledger.Status);
     }
 
     public async Task<CustomerResponse> UpdateAsync(
@@ -164,7 +208,9 @@ public sealed class CustomersService
                 "A customer with this primary phone already exists in this environment.");
         }
 
-        return _mapper.Map<CustomerResponse>(entity);
+        var ledger = await _db.Ledgers.AsNoTracking()
+            .FirstOrDefaultAsync(l => l.CustomerId == entity.Id, cancellationToken);
+        return ToResponse(entity, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)

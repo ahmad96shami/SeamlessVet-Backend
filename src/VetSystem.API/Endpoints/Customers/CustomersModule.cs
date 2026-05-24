@@ -62,11 +62,12 @@ public sealed class CustomersModule : IEndpointModule
         string? search,
         string? type,
         Guid? assignedDoctorId,
+        string? ledgerStatus,
         int? skip,
         int? take,
         CancellationToken cancellationToken)
     {
-        var items = await svc.ListAsync(search, type, assignedDoctorId, skip, take, cancellationToken);
+        var items = await svc.ListAsync(search, type, assignedDoctorId, ledgerStatus, skip, take, cancellationToken);
         return TypedResults.Ok(items);
     }
 
