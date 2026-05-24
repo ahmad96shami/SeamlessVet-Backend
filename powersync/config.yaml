@@ -9,10 +9,16 @@ replication:
     - type: postgresql
       uri: !env PS_PG_URI
       # Resolved from PS_PG_HOST/PS_PG_PORT/PS_PG_DATABASE/PS_PG_USERNAME/PS_PG_PASSWORD in compose.
+      # Disable TLS on this hop: Postgres is reachable only on the private Docker network (never
+      # published) and the .NET side connects without TLS too. The driver does NOT read sslmode from the
+      # URI query string — it must be this explicit key. Move to verify-full + cacert if PG goes off-box.
+      sslmode: disable
 
 storage:
   type: postgresql
   uri: !env PS_PG_URI
+  # Bucket storage shares the same Postgres on the same private network — disable TLS here too.
+  sslmode: disable
 
 api:
   tokens:
