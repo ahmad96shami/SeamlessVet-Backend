@@ -165,9 +165,17 @@ Daily logical `pg_dump` → Cloudflare R2 (off-host), with 30-day retention.
    ./scripts/pg_dump_to_r2.sh        # run once by hand to confirm it uploads
    ```
 
-3. **30-day retention** is enforced by an **R2 lifecycle rule**, not the script. In the Cloudflare
-   dashboard → R2 → the backups bucket → Settings → Object lifecycle rules: *delete objects older than 30
-   days* (optionally scoped to the `pg/` prefix).
+3. **30-day retention** is enforced by an **R2 lifecycle rule**, not the script. Set it in the Cloudflare
+   dashboard → R2 → the bucket → Settings → Object lifecycle rules: *delete objects older than 30 days*
+   (scope it to the backups prefix, e.g. `backups/pg/`). Note: a least-privilege **Object Read/Write**
+   backup token **cannot** set this via the S3 API (`PutBucketLifecycleConfiguration` → `AccessDenied`,
+   confirmed against R2) — use the dashboard, or a one-off admin token.
+
+> **Validated against real R2 (2026-05-24):** with the supplied Object-R/W token, `pg_dump_to_r2.sh`
+> uploaded to `seamlessvet/backups/pg/` and `restore_from_r2.sh --latest` pulled it back for a full
+> restore→resume (~13 s, local stack). The token is correctly scoped (no bucket-admin), so lifecycle is
+> a dashboard step. **Recommended for production:** a **dedicated backups bucket** with its own scoped
+> token, separate from the attachments bucket, so the backup credential can't read medical attachments.
 
 Backups are **plain SQL, gzipped** (`vet-YYYYMMDD-HHMMSS.sql.gz`) — restore with `psql`, no tooling
 version pinning needed.
@@ -209,7 +217,8 @@ part of launch sign-off (target: clean VPS → working state under 1 hour — `L
 | Date | Store | Dataset | Restore+resume time | By |
 |---|---|---|---|---|
 | 2026-05-24 | MinIO (R2 stand-in, local) | seed only | ~12 s | dev (mechanism check) |
-| _(record at launch)_ | real R2 | representative | | |
+| 2026-05-24 | **real R2** (`seamlessvet`), local stack | seed only | ~13 s | dev (real-R2 round-trip) |
+| _(record at launch)_ | real R2, on the VPS | representative | | |
 
 ---
 
