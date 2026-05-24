@@ -1,0 +1,151 @@
+# Production stack — single VPS, Docker Compose. See vet-backend/RUNBOOK.md for deploy/restore.
+#
+# Topology:
+#   nginx ──TLS(Cloudflare Origin cert)──> api (Kestrel :8080, in-process Hangfire worker + SignalR)
+#                                      └──> powersync (:8080, mobile sync stream)
+#   api ──> postgres (private, not published)        migrate (one-shot) applies EF migrations first
+#   powersync ──logical replication──> postgres      (auto-migration is disabled in the app)
+#
+# Secrets:
+#   - Scalars (DB password, JWT key, R2 creds, bootstrap admin pw, Seq URL) live in ./.env.prod
+#     (gitignored). Always invoke with `--env-file .env.prod` so ${...} interpolation resolves.
+#   - The one multi-line secret — the PowerSync RSA signing keypair — lives in
+#     ./secrets/appsettings.Production.json (gitignored), mounted read-only into the API. Env files
+#     cannot portably carry PEM newlines. See .env.prod.example and secrets/*.example.json.
+#
+# Canonical invocation:
+#   docker compose --env-file .env.prod -f docker-compose.prod.yaml up -d --build
+
+name: vet
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_wal_senders=10
+      - -c
+      - max_replication_slots=10
+    environment:
+      POSTGRES_DB: vet
+      POSTGRES_USER: vet
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?set PG_PASSWORD in .env.prod}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates the `powersync` publication on first init (empty data dir only). See db-init/.
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+    # Not published to the host — Postgres is reachable only on the internal compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vet -d vet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # One-shot: applies EF Core migrations via the bundle, then exits 0. The API waits for this to
+  # complete successfully before booting (auto-migration is disabled in Program.cs).
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: migrate
+      args:
+        DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - --connection
+      - Host=postgres;Port=5432;Database=vet;Username=vet;Password=${PG_PASSWORD}
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: final
+      args:
+        DOTNET_VERSION: ${DOTNET_VERSION:-10.0}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # All scalar secrets + tunables. Keys are .NET env-var form (Section__Key).
+    env_file:
+      - .env.prod
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      # DRY with the Postgres container's password; overrides the appsettings placeholder.
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=vet;Username=vet;Password=${PG_PASSWORD}
+    volumes:
+      # The PowerSync RSA signing keypair (multi-line PEM) — merged over appsettings by the runtime
+      # because ASPNETCORE_ENVIRONMENT=Production.
+      - ./secrets/appsettings.Production.json:/app/appsettings.Production.json:ro
+      - api-logs:/app/logs
+    # Reachable only via nginx; not published to the host.
+    expose:
+      - "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+
+  powersync:
+    image: journeyapps/powersync-service:${POWERSYNC_IMAGE_TAG:-1.10.2}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      # TLS for this hop is disabled via sslmode in powersync/config.yaml (not the URI — the driver
+      # ignores ?sslmode). Internal private network; Postgres is never published.
+      PS_PG_URI: postgresql://vet:${PG_PASSWORD}@postgres:5432/vet
+      # The API mints PowerSync client tokens; the service trusts this JWKS endpoint (internal network).
+      PS_API_JWKS_URI: http://api:8080/.well-known/jwks.json
+      PS_DEV_TOKEN_FALLBACK: ""
+      # Point the runner at the mounted config via env var. NOT the `-config` flag: the runner uses
+      # commander, which parses single-dash `-config` as `-c onfig` and drops the path.
+      POWERSYNC_CONFIG_PATH: /config/config.yaml
+    volumes:
+      - ./powersync/config.yaml:/config/config.yaml:ro
+      - ./powersync/sync-rules.yaml:/config/sync-rules.yaml:ro
+    expose:
+      - "8080"
+    command: ["start"]
+
+  # TLS edge. Terminates the Cloudflare Origin Certificate and reverse-proxies the API and the
+  # PowerSync stream (both need WebSocket upgrade). See nginx/conf.d/vet.conf.template.
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      powersync:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Substituted into the conf template at container start (envsubst).
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
+      # Only substitute ${DOMAIN}; leave nginx runtime vars ($host, $proxy_add_x_forwarded_for, …) intact.
+      NGINX_ENVSUBST_FILTER: "^DOMAIN$$"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/templates:ro
+      - ./secrets/cloudflare-origin:/etc/nginx/origin-certs:ro
+
+volumes:
+  pgdata:
+  api-logs:

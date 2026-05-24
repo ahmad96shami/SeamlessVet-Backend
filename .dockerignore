@@ -1,0 +1,30 @@
+# Keep the build context small and deterministic. The image builds the API from src/ only.
+**/bin/
+**/obj/
+**/out/
+
+# Tests are never part of the runtime image (API is built csproj-targeted, not via the solution).
+tests/
+
+# Local runtime + secrets — must never enter an image layer.
+logs/
+**/*.log
+.env
+.env.local
+.env.prod
+secrets/
+appsettings.Local.json
+appsettings.Development.json
+
+# Compose / docs / VCS — irrelevant to the build.
+docker-compose*.yml
+docker-compose*.yaml
+nginx/
+scripts/
+**/*.md
+.git/
+.github/
+.vs/
+.vscode/
+.idea/
+.DS_Store

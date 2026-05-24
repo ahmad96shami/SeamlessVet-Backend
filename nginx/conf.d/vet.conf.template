@@ -1,0 +1,87 @@
+# TLS edge for the VetSystem production stack.
+#
+# Rendered by the nginx image's envsubst step at container start: ${DOMAIN} is substituted (and only
+# ${DOMAIN} — see NGINX_ENVSUBST_FILTER in docker-compose.prod.yaml), everything else ($host, etc. is
+# an nginx runtime variable) is left intact. Output lands at /etc/nginx/conf.d/vet.conf.
+#
+# Cloudflare sits in front (Full (Strict) TLS): clients ↔ Cloudflare with the edge cert, Cloudflare ↔
+# this origin with the Cloudflare Origin Certificate mounted at /etc/nginx/origin-certs/. Use a single
+# Origin Certificate covering both apex and wildcard (e.g. example.com + *.example.com).
+#
+# Routing is by sub-domain so the API's own /sync/{table} write endpoints never collide with the
+# PowerSync service's sync-stream paths:
+#   api.${DOMAIN}  → api:8080        (REST, /hubs/notifications SignalR WS, /sync write path)
+#   sync.${DOMAIN} → powersync:8080  (mobile sync stream — WebSocket)
+
+# WebSocket upgrade plumbing (SignalR hub + PowerSync stream both need it).
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# Recover the real client IP from Cloudflare. Keep the published ranges current:
+#   https://www.cloudflare.com/ips/  — uncomment and fill in, then `nginx -s reload`.
+# set_real_ip_from 173.245.48.0/20;
+# ... (all Cloudflare v4 + v6 ranges) ...
+# real_ip_header CF-Connecting-IP;
+
+# Direct HTTP hits → HTTPS (Cloudflare reaches the origin on 443; this covers stray port-80 traffic).
+server {
+    listen 80 default_server;
+    listen [::]:80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+# --- API ---------------------------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name api.${DOMAIN};
+
+    ssl_certificate     /etc/nginx/origin-certs/origin.pem;
+    ssl_certificate_key /etc/nginx/origin-certs/origin.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    # Attachments upload straight to R2 via presigned URLs, so API request bodies are small JSON.
+    client_max_body_size 25m;
+
+    location / {
+        proxy_pass http://api:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SignalR (/hubs/notifications) rides a WebSocket — keep the upgrade headers + a long read.
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_read_timeout 3600s;
+    }
+}
+
+# --- PowerSync sync stream ---------------------------------------------------
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name sync.${DOMAIN};
+
+    ssl_certificate     /etc/nginx/origin-certs/origin.pem;
+    ssl_certificate_key /etc/nginx/origin-certs/origin.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    location / {
+        proxy_pass http://powersync:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        # The sync stream is long-lived; don't let nginx time it out mid-stream.
+        proxy_read_timeout 3600s;
+    }
+}
