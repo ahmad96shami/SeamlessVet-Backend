@@ -15,6 +15,8 @@ namespace VetSystem.API.Identity;
 /// </summary>
 public sealed class UserAdminService
 {
+    private const int MaxPageSize = 200;
+
     private readonly ApplicationDbContext _db;
     private readonly INumberPrefixGenerator _prefixes;
     private readonly IPermissionResolver _permissionResolver;
@@ -59,6 +61,105 @@ public sealed class UserAdminService
                 x.r.Status,
                 x.r.CreatedAt))
             .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The live user roster (GET /admin/users). Env-scoped by the global query filter; offset-paged
+    /// (admin tables, TECH_STACK API Design Notes). Optional case-insensitive search (name/phone/email)
+    /// and role/status filters. Never returns the password hash.
+    /// </summary>
+    public async Task<IReadOnlyList<UserResponse>> ListUsersAsync(
+        string? search,
+        string? role,
+        string? status,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        if (status is not null && !UserStatus.All.Contains(status))
+        {
+            throw new ConflictException("invalid_status", $"status '{status}' is not a valid user status.");
+        }
+
+        if (role is not null && !RoleKey.All.Contains(role))
+        {
+            throw new ConflictException("invalid_role", $"role '{role}' is not a valid role key.");
+        }
+
+        var query = _db.Users
+            .AsNoTracking()
+            .Join(_db.Roles, u => u.RoleId, r => r.Id, (u, r) => new { u, r });
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var pattern = $"%{search.Trim()}%";
+            query = query.Where(x =>
+                EF.Functions.ILike(x.u.FullName, pattern) ||
+                EF.Functions.ILike(x.u.PhonePrimary, pattern) ||
+                (x.u.Email != null && EF.Functions.ILike(x.u.Email, pattern)));
+        }
+
+        if (role is not null)
+        {
+            query = query.Where(x => x.r.Key == role);
+        }
+
+        if (status is not null)
+        {
+            query = query.Where(x => x.u.Status == status);
+        }
+
+        return await query
+            .OrderBy(x => x.u.FullName)
+            .Skip(Math.Max(0, skip ?? 0))
+            .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
+            .Select(x => new UserResponse(
+                x.u.Id,
+                x.u.FullName,
+                x.u.PhonePrimary,
+                x.u.Email,
+                x.r.Key,
+                x.r.Name,
+                x.u.Status,
+                x.u.NumberPrefix,
+                x.u.LicenseNumber,
+                x.u.CreatedAt))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>A single user + their permission overrides (GET /admin/users/{id}).</summary>
+    public async Task<UserDetailResponse> GetUserAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var row = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.Id == id)
+            .Join(_db.Roles, u => u.RoleId, r => r.Id, (u, r) => new { u, r })
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("user", id);
+
+        var overrides = await _db.UserPermissionOverrides
+            .AsNoTracking()
+            .Where(o => o.UserId == id && o.DeletedAt == null)
+            .Join(
+                _db.Permissions,
+                o => o.PermissionId,
+                p => p.Id,
+                (o, p) => new UserPermissionOverrideItem(p.Key, o.Effect))
+            .ToListAsync(cancellationToken);
+
+        return new UserDetailResponse(
+            row.u.Id,
+            row.u.FullName,
+            row.u.PhonePrimary,
+            row.u.Email,
+            row.r.Key,
+            row.r.Name,
+            row.u.Status,
+            row.u.NumberPrefix,
+            row.u.LicenseNumber,
+            row.u.LicenseDetails,
+            row.u.CreatedAt,
+            overrides);
     }
 
     public async Task<RegistrationRequestSummary> ApproveAsync(

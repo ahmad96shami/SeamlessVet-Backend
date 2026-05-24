@@ -40,3 +40,33 @@ public sealed record RegistrationRequestSummary(
     string RequestedRoleKey,
     string Status,
     DateTimeOffset CreatedAt);
+
+/// <summary>A row in the admin user roster (GET /admin/users). Never exposes the password hash.</summary>
+public sealed record UserResponse(
+    Guid Id,
+    string FullName,
+    string PhonePrimary,
+    string? Email,
+    string RoleKey,
+    string RoleName,
+    string Status,
+    string? NumberPrefix,
+    string? LicenseNumber,
+    DateTimeOffset CreatedAt);
+
+public sealed record UserPermissionOverrideItem(string PermissionKey, string Effect);
+
+/// <summary>Single user (GET /admin/users/{id}) + their permission overrides (for the override editor).</summary>
+public sealed record UserDetailResponse(
+    Guid Id,
+    string FullName,
+    string PhonePrimary,
+    string? Email,
+    string RoleKey,
+    string RoleName,
+    string Status,
+    string? NumberPrefix,
+    string? LicenseNumber,
+    string? LicenseDetails,
+    DateTimeOffset CreatedAt,
+    IReadOnlyList<UserPermissionOverrideItem> PermissionOverrides);

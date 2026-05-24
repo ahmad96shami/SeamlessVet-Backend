@@ -363,6 +363,18 @@ builder.Services.AddOpenApiDocument(settings =>
 
 builder.Services.AddRouting(options => options.LowercaseUrls = true);
 
+// CORS for the browser web client (the native mobile app doesn't need it). Origins are config-driven
+// (Cors:AllowedOrigins) so each environment lists its own web URL(s); the dev default is the Vite
+// dev/preview ports. Bearer tokens travel in the Authorization header (no cookies) so credentials are
+// not enabled; AllowAnyHeader covers Authorization + Idempotency-Key.
+var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? ["http://localhost:5173", "http://localhost:4173"];
+builder.Services.AddCors(options =>
+    options.AddPolicy("web", policy => policy
+        .WithOrigins(corsOrigins)
+        .AllowAnyHeader()
+        .AllowAnyMethod()));
+
 // M13 task 10 — rate limit /sync/* with a per-user token bucket to absorb field-doctor reconnect/sync
 // storms (PRD §14 risk mitigation). The limiter is always wired; the "sync" policy decides per request
 // whether to enforce, reading config lazily so a test can toggle it (eager host-build reads can't be
@@ -422,6 +434,9 @@ var app = builder.Build();
 
 app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+
+// CORS before auth so the browser's anonymous preflight (OPTIONS) is answered (web client only).
+app.UseCors("web");
 
 app.UseAuthentication();
 app.UseAuthorization();

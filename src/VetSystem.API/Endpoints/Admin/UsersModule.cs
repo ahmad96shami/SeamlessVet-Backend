@@ -13,6 +13,14 @@ public sealed class UsersModule : IEndpointModule
             .RequireAuthorization()
             .WithTags("Admin");
 
+        group.MapGet("/", List)
+            .RequirePermission(PermissionKey.UsersManage)
+            .WithName("Admin_Users_List");
+
+        group.MapGet("/{id:guid}", Get)
+            .RequirePermission(PermissionKey.UsersManage)
+            .WithName("Admin_Users_Get");
+
         group.MapPost("/{id:guid}/deactivate", Deactivate)
             .RequirePermission(PermissionKey.UsersManage)
             .AddEndpointFilter(new IdempotencyKeyFilter("user_deactivate"))
@@ -28,6 +36,25 @@ public sealed class UsersModule : IEndpointModule
             .AddEndpointFilter<ValidationFilter<PermissionOverrideRequest>>()
             .AddEndpointFilter(new IdempotencyKeyFilter("user_permission_override"))
             .WithName("Admin_Users_PermissionOverride");
+    }
+
+    private static async Task<IResult> List(
+        UserAdminService admin,
+        string? search,
+        string? role,
+        string? status,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var items = await admin.ListUsersAsync(search, role, status, skip, take, cancellationToken);
+        return TypedResults.Ok(items);
+    }
+
+    private static async Task<IResult> Get(Guid id, UserAdminService admin, CancellationToken cancellationToken)
+    {
+        var user = await admin.GetUserAsync(id, cancellationToken);
+        return TypedResults.Ok(user);
     }
 
     private static async Task<IResult> Deactivate(Guid id, UserAdminService admin, CancellationToken cancellationToken)
