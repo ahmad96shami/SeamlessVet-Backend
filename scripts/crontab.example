@@ -1,0 +1,10 @@
+# Daily Postgres → R2 backup. Install on the production host with `crontab -e`.
+#
+# Runs 03:15 server time daily. Cron has a bare PATH, so we set one that includes docker + aws, cd to
+# the project, and append output to a log. Adjust the path to your checkout.
+#
+# Verify the binaries' locations first:  which docker aws  (often /usr/bin and /usr/local/bin)
+
+PATH=/usr/local/bin:/usr/bin:/bin
+
+15 3 * * *  cd /opt/vet-backend && ./scripts/pg_dump_to_r2.sh >> /var/log/vet-pg-backup.log 2>&1
