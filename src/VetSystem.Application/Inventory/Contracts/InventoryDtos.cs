@@ -64,6 +64,39 @@ public sealed record InventoryMovementResponse(
     Guid PerformedBy,
     DateTimeOffset CreatedAt);
 
+// ---- Web read projections (the Center Web App reads on-hand + movements over REST; the mobile
+//      app reads the same data via PowerSync). Authenticated, env-scoped, offset-paged. ----
+
+/// <summary>
+/// A current on-hand row for the web stock list and alert views (GET /inventory/stock) — a
+/// <c>stock_items ⋈ products</c> projection at one location. <see cref="ReorderPoint"/> and
+/// <see cref="ExpirationDate"/> are the product's; <see cref="BelowReorderPoint"/> is the low-stock
+/// flag, computed with the <b>same threshold the M11 scan + alerts use</b> —
+/// <c>quantity ≤ reorder_point × (1 + system_settings.low_stock_threshold_pct/100)</c> — so
+/// "low stock" means one thing system-wide (see <see cref="LowStockItem"/>).
+/// </summary>
+public sealed record StockLevelResponse(
+    Guid ProductId,
+    string NameAr,
+    string? NameLatin,
+    string? Barcode,
+    string LocationType,
+    Guid LocationId,
+    decimal Quantity,
+    decimal ReorderPoint,
+    DateOnly? ExpirationDate,
+    bool BelowReorderPoint);
+
+/// <summary>
+/// A field doctor's inventory (GET /inventory/field-inventories) — the picker source for the
+/// web load/unload flows. <see cref="Id"/> is the field-inventory id passed as the load/unload
+/// <c>FieldInventoryId</c>; <see cref="DoctorName"/> is the owning doctor's full name.
+/// </summary>
+public sealed record FieldInventoryResponse(
+    Guid Id,
+    Guid DoctorId,
+    string DoctorName);
+
 // ---- Dedicated /inventory/* endpoint requests (Admin / Inventory staff; online-preferred) ----
 
 /// <summary>Purchase-order receive into a warehouse (defaults to the environment's central one).</summary>

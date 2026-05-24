@@ -19,6 +19,19 @@ public sealed class InventoryModule : IEndpointModule
             .RequireAuthorization()
             .WithTags("Inventory");
 
+        // Reads (authenticated; BACKEND_PREREQS §2) — the web reads on-hand + history over REST.
+        group.MapGet("/stock", ListStock)
+            .WithName("Inventory_Stock")
+            .WithSummary("Current on-hand per product per location (stock list + alert views).");
+
+        group.MapGet("/movements", ListMovements)
+            .WithName("Inventory_Movements")
+            .WithSummary("Append-only stock movement history, filterable + offset-paged.");
+
+        group.MapGet("/field-inventories", ListFieldInventories)
+            .WithName("Inventory_FieldInventories")
+            .WithSummary("Field doctors' inventories — the load/unload doctor picker.");
+
         group.MapPost("/receive", Receive)
             .RequirePermission(PermissionKey.InventoryAdjust)
             .AddEndpointFilter<ValidationFilter<ReceiveStockRequest>>()
@@ -46,6 +59,47 @@ public sealed class InventoryModule : IEndpointModule
             .AddEndpointFilter(new IdempotencyKeyFilter("inventory_unload_field"))
             .WithName("Inventory_UnloadField")
             .WithSummary("Return stock from a field inventory to the central warehouse.");
+    }
+
+    private static async Task<IResult> ListStock(
+        InventoryReadService svc,
+        string? locationType,
+        Guid? locationId,
+        Guid? productId,
+        string? search,
+        bool? lowStockOnly,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var items = await svc.ListStockAsync(
+            locationType, locationId, productId, search, lowStockOnly, skip, take, cancellationToken);
+        return TypedResults.Ok(items);
+    }
+
+    private static async Task<IResult> ListMovements(
+        InventoryReadService svc,
+        Guid? productId,
+        string? locationType,
+        Guid? locationId,
+        string? movementType,
+        DateOnly? from,
+        DateOnly? to,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        var items = await svc.ListMovementsAsync(
+            productId, locationType, locationId, movementType, from, to, skip, take, cancellationToken);
+        return TypedResults.Ok(items);
+    }
+
+    private static async Task<IResult> ListFieldInventories(
+        InventoryReadService svc,
+        CancellationToken cancellationToken)
+    {
+        var items = await svc.ListFieldInventoriesAsync(cancellationToken);
+        return TypedResults.Ok(items);
     }
 
     private static async Task<IResult> Receive(
