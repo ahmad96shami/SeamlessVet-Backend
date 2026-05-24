@@ -6,8 +6,9 @@ namespace VetSystem.API.Endpoints.Sync;
 
 /// <summary>
 /// Generic <c>/sync/{table}</c> route group — the only write path used by PowerSync's upload
-/// connector and the web offline outbox. Auth → idempotency filters bind once here; each
-/// milestone adds a <see cref="ISyncTableHandler"/> for its tables to plug into this pipeline.
+/// connector and the web offline outbox. Auth → per-user rate limit (the <c>"sync"</c> token-bucket
+/// policy, M13 task 10) → idempotency filters bind once here; each milestone adds a
+/// <see cref="ISyncTableHandler"/> for its tables to plug into this pipeline.
 /// </summary>
 public sealed class SyncModule : IEndpointModule
 {
@@ -15,6 +16,7 @@ public sealed class SyncModule : IEndpointModule
     {
         var group = endpoints.MapGroup("/sync/{table}")
             .RequireAuthorization()
+            .RequireRateLimiting("sync")
             .AddEndpointFilter<IdempotencyKeyFilter>()
             .WithTags("Sync");
 

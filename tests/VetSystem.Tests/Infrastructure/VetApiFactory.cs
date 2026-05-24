@@ -50,6 +50,14 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public IClock? Clock { get; init; }
 
+    /// <summary>
+    /// Turns the <c>/sync/*</c> rate limiter on (it is off in the Test environment by default so the
+    /// broad suite is never throttled) with a tiny <see cref="SyncTokenLimit"/> bucket and a long
+    /// replenishment window, so the M13 task-10 limiter can be asserted deterministically in one burst.
+    /// </summary>
+    public bool EnableRateLimiting { get; init; }
+    public int SyncTokenLimit { get; init; } = 3;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Test");
@@ -70,6 +78,15 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
                 overrides["R2:SecretKey"] = R2SecretKey;
                 overrides["R2:Bucket"] = R2Bucket;
                 overrides["R2:Region"] = "us-east-1";
+            }
+
+            if (EnableRateLimiting)
+            {
+                overrides["RateLimiting:Enabled"] = "true";
+                overrides["RateLimiting:Sync:TokenLimit"] = SyncTokenLimit.ToString();
+                overrides["RateLimiting:Sync:TokensPerPeriod"] = "1";
+                // Long window so no tokens replenish mid-burst — the assertion stays deterministic.
+                overrides["RateLimiting:Sync:ReplenishmentPeriodSeconds"] = "120";
             }
 
             cfg.AddInMemoryCollection(overrides);

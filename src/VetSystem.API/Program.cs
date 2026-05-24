@@ -8,11 +8,14 @@
 //            route groups via `AddEndpointFilter`, not per-endpoint code.
 // Errors:    Domain exceptions → `{ code, message, fieldErrors? }` via ExceptionHandlingMiddleware.
 
+using System.Globalization;
 using System.Text;
+using System.Threading.RateLimiting;
 using FluentValidation;
 using Hangfire;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.IdentityModel.Tokens;
 using NSwag;
 using NSwag.Generation.Processors.Security;
@@ -307,6 +310,61 @@ builder.Services.AddOpenApiDocument(settings =>
 
 builder.Services.AddRouting(options => options.LowercaseUrls = true);
 
+// M13 task 10 — rate limit /sync/* with a per-user token bucket to absorb field-doctor reconnect/sync
+// storms (PRD §14 risk mitigation). The limiter is always wired; the "sync" policy decides per request
+// whether to enforce, reading config lazily so a test can toggle it (eager host-build reads can't be
+// overridden by WebApplicationFactory — see VetApiFactory). Default: off in the "Test" environment (so
+// the broad integration suite is never throttled), on everywhere else; explicit "RateLimiting:Enabled"
+// wins. Tuning knobs live in "RateLimiting:Sync" — see vet-backend/CLAUDE.md operations.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+
+    options.AddPolicy("sync", httpContext =>
+    {
+        var config = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var env = httpContext.RequestServices.GetRequiredService<IHostEnvironment>();
+        var enabled = config.GetValue<bool?>("RateLimiting:Enabled") ?? !env.IsEnvironment("Test");
+        if (!enabled)
+        {
+            return RateLimitPartition.GetNoLimiter("disabled");
+        }
+
+        // Partition per authenticated user (same identity the rest of the app uses); fall back to the
+        // connection IP for the rare unauthenticated case so a key always exists.
+        var accessor = httpContext.RequestServices.GetRequiredService<ICurrentUserAccessor>();
+        var partitionKey = accessor.UserId?.ToString()
+            ?? httpContext.Connection.RemoteIpAddress?.ToString()
+            ?? "anonymous";
+
+        var sync = config.GetSection("RateLimiting:Sync");
+        return RateLimitPartition.GetTokenBucketLimiter(partitionKey, _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = sync.GetValue<int?>("TokenLimit") ?? 200,
+            TokensPerPeriod = sync.GetValue<int?>("TokensPerPeriod") ?? 100,
+            ReplenishmentPeriod = TimeSpan.FromSeconds(sync.GetValue<int?>("ReplenishmentPeriodSeconds") ?? 10),
+            QueueLimit = sync.GetValue<int?>("QueueLimit") ?? 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            AutoReplenishment = true,
+        });
+    });
+
+    // Match the canonical { code, message } error shape and surface Retry-After to clients.
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
+        {
+            context.HttpContext.Response.Headers.RetryAfter =
+                ((int)retryAfter.TotalSeconds).ToString(NumberFormatInfo.InvariantInfo);
+        }
+
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new { code = "rate_limited", message = "Too many sync requests; slow down and retry." },
+            cancellationToken);
+    };
+});
+
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
@@ -314,6 +372,10 @@ app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After auth so the rate-limiter partition can read the authenticated user (M13 task 10). The "sync"
+// policy is a no-op limiter unless enabled, so this is safe to run in every environment.
+app.UseRateLimiter();
 
 app.UseOpenApi(settings => settings.Path = "/swagger/{documentName}/swagger.json");
 app.UseSwaggerUi(settings =>

@@ -87,3 +87,20 @@ If the slot is **not** created, the most common causes are: (1) `wal_level` is n
 - Solution file: use `VetSystem.slnx` (XML) — pass `--solution VetSystem.slnx` to `dotnet sln` commands.
 - Hangfire + `Hangfire.PostgreSql` can pull a vulnerable `Newtonsoft.Json` transitive — if `dotnet list package --vulnerable` flags it, pin `Newtonsoft.Json` in `VetSystem.Infrastructure.csproj` (as done in CourierPlatform) and never downgrade the pin.
 - `appsettings.json` ships with placeholders for the JWT secret, R2 credentials, and the PowerSync token-signing / JWKS key. Override via `dotnet user-secrets` (UserSecretsId `vet-system-secrets`) — never edit the file with real values.
+
+## Operations
+
+### Rate limiting (`/sync/*`)
+
+`/sync/*` is rate-limited with a **per-user token bucket** (ASP.NET Core's built-in limiter; M13 task 10) to absorb the field-doctor reconnect/sync storms in PRD §14. The partition key is the authenticated user (connection IP as a fallback). Over-limit requests get **429** with the canonical `{ code: "rate_limited", message }` body and a `Retry-After` header.
+
+Tuning knobs live in the `RateLimiting:Sync` config section (override via `appsettings.{Env}.json`, env vars, or user-secrets — no code change):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `TokenLimit` | `200` | Bucket capacity — the max burst one user may send. |
+| `TokensPerPeriod` | `100` | Tokens added each replenishment period. |
+| `ReplenishmentPeriodSeconds` | `10` | How often tokens replenish. |
+| `QueueLimit` | `0` | Requests queued when the bucket is empty (`0` = reject immediately). |
+
+`RateLimiting:Enabled` is the master switch: it defaults **off in the `Test` environment** (so the integration suite is never throttled) and **on** everywhere else; set it explicitly to force either way. The limiter middleware always runs — when disabled, the `sync` policy resolves to a no-op limiter, so it stays transparent. The flag and limits are read **per request** (not at host build) so tests/ops can toggle them without the eager-config pitfall that `VetApiFactory` documents.
