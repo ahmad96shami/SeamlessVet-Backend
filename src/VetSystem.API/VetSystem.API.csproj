@@ -8,6 +8,10 @@
     <RootNamespace>VetSystem.API</RootNamespace>
     <UserSecretsId>vet-system-secrets</UserSecretsId>
     <AllowMissingPrunePackageData>true</AllowMissingPrunePackageData>
+    <!-- Sentry injects a global `using Sentry;` into ImplicitUsings projects, which collides with the
+         domain's Attachment / AttachmentType entities. Opt out: Sentry is referenced only in Program.cs
+         via extension methods (UseSentry, WriteTo.Sentry) that resolve through other namespaces. -->
+    <SentryImplicitUsings>false</SentryImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>
@@ -28,6 +32,8 @@
     </PackageReference>
     <PackageReference Include="NSwag.AspNetCore" Version="14.7.1" />
     <PackageReference Include="QuestPDF" Version="2025.5.0" />
+    <PackageReference Include="Sentry.AspNetCore" Version="6.5.0" />
+    <PackageReference Include="Sentry.Serilog" Version="6.5.0" />
     <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="Serilog.Sinks.Seq" Version="9.1.0" />

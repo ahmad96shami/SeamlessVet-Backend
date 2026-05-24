@@ -20,6 +20,8 @@ using Microsoft.IdentityModel.Tokens;
 using NSwag;
 using NSwag.Generation.Processors.Security;
 using Serilog;
+using Serilog.Events;
+using Serilog.Filters;
 using VetSystem.API.Endpoints;
 using VetSystem.API.Endpoints.Sync;
 using VetSystem.API.Filters;
@@ -41,7 +43,54 @@ builder.Host.UseSerilog((context, services, configuration) =>
     {
         configuration.WriteTo.Seq(seqUrl);
     }
+
+    // Sentry (M13 task 8): forward logged errors to Sentry as events and INFO+ as breadcrumbs. The SDK
+    // itself is initialized by UseSentry (below) — InitializeSdk=false here so this sink only feeds the
+    // already-running hub. No DSN ⇒ the hub is disabled and this is a no-op. Routing capture through
+    // Serilog (rather than Sentry's ASP.NET middleware) is deliberate: ExceptionHandlingMiddleware
+    // handles every request exception so it never propagates to outer middleware, but it logs 500s via
+    // LogError — and this also captures Hangfire job failures, which aren't HTTP at all.
+    if (!string.IsNullOrWhiteSpace(context.Configuration["Sentry:Dsn"]))
+    {
+        // Scope the Sentry sink through a sub-logger so one source can be dropped from it without
+        // touching file/Seq: UseSerilogRequestLogging logs every 5xx at Error, which would otherwise
+        // reach Sentry as a second, stack-less issue for the same request, double-counting each 500.
+        // Exclude only that source's Error events — the ExceptionHandlingMiddleware event already
+        // carries the exception + HTTP request context (via UseSentry), and the source's Information
+        // request logs still feed Sentry breadcrumbs.
+        var fromRequestLogging = Matching.FromSource("Serilog.AspNetCore.RequestLoggingMiddleware");
+        configuration.WriteTo.Logger(sentry => sentry
+            .Filter.ByExcluding(e => e.Level == LogEventLevel.Error && fromRequestLogging(e))
+            .WriteTo.Sentry(o =>
+            {
+                o.InitializeSdk = false;
+                o.MinimumEventLevel = LogEventLevel.Error;
+                o.MinimumBreadcrumbLevel = LogEventLevel.Information;
+            }));
+    }
 });
+
+// Sentry crash/error reporting (M13 task 8). Config-driven and OFF until a DSN is supplied (user-secrets
+// in dev, env var `Sentry__Dsn` in prod — never commit it). Environment + release are tagged so issues
+// group per deploy; release falls back to the assembly's informational version when unset. PII is NOT
+// sent (medical/financial data) and request bodies aren't captured. UseSentry owns SDK init + HTTP
+// request enrichment + tracing; the actual error capture flows through the Serilog sink wired above.
+// See vet-backend/CLAUDE.md "Operations".
+var sentryDsn = builder.Configuration["Sentry:Dsn"];
+if (!string.IsNullOrWhiteSpace(sentryDsn))
+{
+    builder.WebHost.UseSentry(o =>
+    {
+        o.Dsn = sentryDsn;
+        var sentryEnv = builder.Configuration["Sentry:Environment"];
+        o.Environment = string.IsNullOrWhiteSpace(sentryEnv) ? builder.Environment.EnvironmentName : sentryEnv;
+        var release = builder.Configuration["Sentry:Release"];
+        o.Release = string.IsNullOrWhiteSpace(release) ? null : release; // null ⇒ auto-detect from assembly
+        o.SendDefaultPii = false;
+        o.AttachStacktrace = true;
+        o.TracesSampleRate = builder.Configuration.GetValue<double?>("Sentry:TracesSampleRate") ?? 0.0;
+    });
+}
 
 builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptions.SectionName));
 builder.Services.Configure<PowerSyncOptions>(builder.Configuration.GetSection(PowerSyncOptions.SectionName));

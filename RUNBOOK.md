@@ -7,7 +7,8 @@ Operating the production backend stack on a single VPS with Docker Compose. Comp
 > **Status note (read first).** The deploy / migrate / backup / restore paths below were validated by a
 > full local bring-up of `docker-compose.prod.yaml`, and the PowerSync mobile read path now loads
 > cleanly (sync rules were reworked JOIN-free — see [Known issues](#known-issues--pre-launch-blockers)).
-> Sentry crash reporting (M13 task 8) is still deferred — wire it before launch.
+> Sentry crash reporting (M13 task 8) is now wired — config-driven and OFF until you set `Sentry__Dsn`
+> in `.env.prod` (see `.env.prod.example` and vet-backend/CLAUDE.md "Operations").
 
 ---
 
@@ -346,5 +347,7 @@ If the slot is **missing**, the usual causes (in order seen during bring-up):
    `vaccinations` carry a **denormalized scope key** kept correct by BEFORE INSERT/UPDATE triggers
    (migration `M14_SyncScopeDenormalization`). Validated: the rules load cleanly, the slot is active, and
    the trigger/scoping behavior is covered by the test suite. Keep new data queries single-table.
-2. **Sentry not yet wired** (M13 task 8, deferred). `LAUNCH_CHECKLIST.md` currently verifies "Serilog
-   clean"; add Sentry before launch for crash/error alerting.
+2. **Sentry — wired, DSN not set (M13 task 8).** The SDK is wired (environment + release tagging; logged
+   errors and Hangfire job failures are captured, 5xx request-log duplicates excluded). It is
+   **config-driven and OFF until `Sentry__Dsn` is set** in `.env.prod` (see `.env.prod.example`). Set it
+   before launch for crash/error alerting.
