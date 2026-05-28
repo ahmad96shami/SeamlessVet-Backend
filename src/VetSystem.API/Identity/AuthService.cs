@@ -176,7 +176,8 @@ public sealed class AuthService
             newRaw,
             rotated.ExpiresAt,
             user.Id,
-            roleKey);
+            roleKey,
+            user.NumberPrefix);
     }
 
     public async Task LogoutAsync(Guid environmentId, string rawRefreshToken, CancellationToken cancellationToken)
@@ -209,7 +210,8 @@ public sealed class AuthService
             rawRefresh,
             stored.ExpiresAt,
             user.Id,
-            roleKey);
+            roleKey,
+            user.NumberPrefix);
     }
 
     private Task<string> GetRoleKeyAsync(Guid roleId, CancellationToken cancellationToken)
