@@ -1,84 +1,105 @@
-# PowerSync Sync Rules — per-doctor read scope (PRD §8.6).
+# PowerSync Sync Rules — per-doctor read scope (PRD §8.6), Sync Streams syntax.
 #
-# PowerSync's rule SQL is a restricted dialect: each `data` query must SELECT from a SINGLE table —
-# no JOINs, no subqueries. Parent→child scoping is therefore expressed with **parameter queries**:
-# a bucket's `parameters` query returns the set of anchor ids the doctor may see (their customers,
-# visits, field inventory, contracts), and each `data` query filters a child table by `bucket.<id>`.
+# Each stream is `auto_subscribe: true`, so the client just `connect()`s and the streams flow
+# without explicit `syncStream().subscribe()` calls. The legacy `bucket_definitions:` form was
+# replaced with `streams:` to unblock Mo3 — SDK 1.35 + server 1.10.2 in legacy mode never
+# streamed data to the on-device SQLite (the SDK now expects stream metadata the legacy
+# protocol doesn't carry). Server image is bumped to 1.21.0 alongside this change.
 #
-# Tables 2+ levels below the doctor (ledger_entries → ledger → customer; invoice_items/payments →
-# invoice → customer/visit; vaccinations → pet → customer) can't be reached by a single FK, so they
-# carry a **denormalized scope key** (customer_id / visit_id) that a BEFORE INSERT/UPDATE trigger keeps
-# equal to the parent's — see migration M14_SyncScopeDenormalization. The key is derived from the
-# immutable parent FK, so a customer reassignment moves the whole subtree automatically and a client
-# can't forge its scope.
+# Parent→child scoping is expressed inline with subqueries against `auth.user_id()`
+# (the new namespace replacing legacy `request.user_id()` for streams). Tables 2+ levels
+# below the doctor (ledger_entries → ledger → customer; invoice_items/payments → invoice →
+# customer/visit; vaccinations → pet → customer) carry a denormalized scope key
+# (`customer_id` / `visit_id`) maintained by a BEFORE INSERT/UPDATE trigger — see
+# migration M14_SyncScopeDenormalization. The key is derived from the immutable parent FK,
+# so a customer reassignment moves the whole subtree automatically and a client can't forge
+# its scope.
 #
-# Writes still flow through the .NET /sync/* endpoints (this file only governs the read/download path).
-# All queries exclude soft-deleted rows.
+# `invoices`, `invoice_items`, `payments` and `vaccinations` appear in BOTH `by_customer`
+# and `by_visit` on purpose: a field invoice may belong to a customer assigned to a different
+# doctor (the field doctor still owes/owns the visit and its money trail). Streams dedupe
+# overlapping rows so the duplicate query is safe.
+#
+# Writes still flow through the .NET `/sync/*` endpoints — this file governs the
+# read/download path only. Every query excludes soft-deleted rows.
 
-bucket_definitions:
+config:
+  # Edition 3 enables the new Sync Streams compiler — required for top-level `with:` CTEs and
+  # per-stream `queries:` (multi-query) on PowerSync 1.21.0. Without it, the YAML validates as
+  # alpha-streams and `queries:` / `with:` are rejected.
+  edition: 3
 
-  # --- Reference data: identical for every field doctor, pull-only on the client (M2). -------------
+with:
+  # Shared CTEs — the doctor's scope anchors, reused across multiple streams. Top-level
+  # `with:` makes these available to every stream.
+  my_customers: SELECT id AS customer_id FROM customers WHERE assigned_doctor_id = auth.user_id() AND deleted_at IS NULL
+  my_visits: SELECT id AS visit_id FROM visits WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
+  my_field_inventories: SELECT id AS field_inventory_id FROM field_inventories WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
+  my_contracts: SELECT id AS contract_id FROM contracts WHERE responsible_doctor_id = auth.user_id() AND deleted_at IS NULL
+
+streams:
+
+  # --- Reference data: identical for every field doctor, pull-only on the client (M2). -----
   reference:
-    data:
+    auto_subscribe: true
+    queries:
       - SELECT * FROM products WHERE deleted_at IS NULL
       - SELECT * FROM services WHERE deleted_at IS NULL
 
-  # --- Entities owned directly by the doctor (one bucket per doctor). ------------------------------
-  # The doctor id comes from the JWT (request.user_id()); each table here has a direct doctor FK.
-  doctor:
-    parameters: SELECT request.user_id() AS doctor_id
-    data:
-      - SELECT * FROM customers           WHERE assigned_doctor_id   = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM visits              WHERE doctor_id            = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM field_inventories   WHERE doctor_id            = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM appointments        WHERE doctor_id            = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM contracts           WHERE responsible_doctor_id = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM batches             WHERE responsible_doctor_id = bucket.doctor_id AND deleted_at IS NULL
-      - SELECT * FROM doctor_entitlements WHERE doctor_id            = bucket.doctor_id AND deleted_at IS NULL
+  # --- Entities owned directly by the doctor. ----------------------------------------------
+  doctor_owned:
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM customers WHERE assigned_doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM visits WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM field_inventories WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM appointments WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM contracts WHERE responsible_doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM batches WHERE responsible_doctor_id = auth.user_id() AND deleted_at IS NULL
+      - SELECT * FROM doctor_entitlements WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
 
-  # --- Everything hanging off the doctor's assigned customers (one bucket per customer). -----------
-  # ledger_entries / invoice_items / payments / vaccinations reach customer_id via the denormalized
-  # scope key (trigger-maintained); the rest have a native customer_id.
+  # --- Everything hanging off the doctor's assigned customers. -----------------------------
+  # ledger_entries / invoice_items / payments / vaccinations reach `customer_id` via the
+  # denormalized scope key (trigger-maintained); the rest have a native `customer_id`.
   by_customer:
-    parameters: SELECT id AS customer_id FROM customers WHERE assigned_doctor_id = request.user_id() AND deleted_at IS NULL
-    data:
-      - SELECT * FROM pets             WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM ledgers          WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM ledger_entries   WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM receipt_vouchers WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM invoices         WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM invoice_items    WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM payments         WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
-      - SELECT * FROM vaccinations     WHERE customer_id = bucket.customer_id AND deleted_at IS NULL
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM pets             WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM ledgers          WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM ledger_entries   WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM receipt_vouchers WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM invoices         WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM invoice_items    WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM payments         WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM vaccinations     WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
 
-  # --- Clinical + financial children of the doctor's own visits (one bucket per visit). ------------
-  # Covers field invoices (and their items/payments) whose customer may not be assigned to the doctor,
-  # plus visit-linked vaccinations. invoice_items/payments/vaccinations reach visit_id via the
-  # denormalized scope key. (A 6-month hot window can be added by passing a client parameter into this
-  # query and filtering visits.started_at — see PRD §8.6; omitted here to keep scoping server-only.)
+  # --- Clinical + financial children of the doctor's own visits. ---------------------------
+  # invoice_items / payments / vaccinations reach `visit_id` via the denormalized scope key.
+  # (A 6-month hot window can be added later by filtering visits.started_at — PRD §8.6.)
   by_visit:
-    parameters: SELECT id AS visit_id FROM visits WHERE doctor_id = request.user_id() AND deleted_at IS NULL
-    data:
-      - SELECT * FROM procedures       WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM prescriptions    WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM daily_follow_ups WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM attachments      WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM vaccinations     WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM invoices         WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM invoice_items    WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
-      - SELECT * FROM payments         WHERE visit_id = bucket.visit_id AND deleted_at IS NULL
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM procedures       WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM prescriptions    WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM daily_follow_ups WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM attachments      WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM vaccinations     WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM invoices         WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM invoice_items    WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM payments         WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
 
-  # --- The doctor's field inventory ("moving warehouse"): balances + movements (one bucket per inv). -
-  # stock_items / inventory_movements join the inventory by location_id; warehouse stock stays server-only.
+  # --- The doctor's field inventory ("moving warehouse"): balances + movements. -----------
+  # stock_items / inventory_movements join the inventory by `location_id`; warehouse stock
+  # stays server-only.
   by_field_inventory:
-    parameters: SELECT id AS field_inventory_id FROM field_inventories WHERE doctor_id = request.user_id() AND deleted_at IS NULL
-    data:
-      - SELECT * FROM stock_items WHERE location_id = bucket.field_inventory_id AND location_type = 'field' AND deleted_at IS NULL
-      - SELECT * FROM inventory_movements WHERE from_location_id = bucket.field_inventory_id AND from_location_type = 'field' AND deleted_at IS NULL
-      - SELECT * FROM inventory_movements WHERE to_location_id   = bucket.field_inventory_id AND to_location_type   = 'field' AND deleted_at IS NULL
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM stock_items          WHERE location_id      IN (SELECT field_inventory_id FROM my_field_inventories) AND location_type      = 'field' AND deleted_at IS NULL
+      - SELECT * FROM inventory_movements  WHERE from_location_id IN (SELECT field_inventory_id FROM my_field_inventories) AND from_location_type = 'field' AND deleted_at IS NULL
+      - SELECT * FROM inventory_movements  WHERE to_location_id   IN (SELECT field_inventory_id FROM my_field_inventories) AND to_location_type   = 'field' AND deleted_at IS NULL
 
-  # --- Per-medication price overrides for the doctor's contracts (one bucket per contract). --------
+  # --- Per-medication price overrides for the doctor's contracts. -------------------------
   by_contract:
-    parameters: SELECT id AS contract_id FROM contracts WHERE responsible_doctor_id = request.user_id() AND deleted_at IS NULL
-    data:
-      - SELECT * FROM contract_medication_prices WHERE contract_id = bucket.contract_id AND deleted_at IS NULL
+    auto_subscribe: true
+    queries:
+      - SELECT * FROM contract_medication_prices WHERE contract_id IN (SELECT contract_id FROM my_contracts) AND deleted_at IS NULL

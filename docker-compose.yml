@@ -32,7 +32,7 @@ services:
       retries: 10
 
   powersync:
-    image: journeyapps/powersync-service:1.10.2
+    image: journeyapps/powersync-service:1.21.0
     container_name: vet-powersync
     depends_on:
       postgres:
