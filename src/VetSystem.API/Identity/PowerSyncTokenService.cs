@@ -51,6 +51,10 @@ public sealed class PowerSyncTokenService : IPowerSyncTokenService, IDisposable
             [
                 new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
                 new Claim("user_id", userId.ToString()),
+                // iat as a NumericDate (JSON number). The PowerSync Service's `jose` verifier
+                // requires this claim; the JwtSecurityToken ctor only sets nbf/exp, so add it
+                // explicitly (Integer64 → serialized as a number, not a string).
+                new Claim(JwtRegisteredClaimNames.Iat, now.ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
             ],
             notBefore: now.UtcDateTime,
             expires: expires.UtcDateTime,
