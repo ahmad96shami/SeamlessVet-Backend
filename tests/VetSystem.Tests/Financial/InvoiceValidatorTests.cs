@@ -90,7 +90,7 @@ public sealed class InvoiceValidatorTests
     [Fact]
     public void Voucher_Valid_Passes()
     {
-        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), 50m, "cash", null, "idem-1");
+        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), null, 50m, "cash", null, "idem-1");
         Voucher.Validate(req).IsValid.Should().BeTrue();
     }
 
@@ -99,14 +99,14 @@ public sealed class InvoiceValidatorTests
     [InlineData(-5)]
     public void Voucher_NonPositiveAmount_Fails(decimal amount)
     {
-        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), amount, "cash", null, "idem-1");
+        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), null, amount, "cash", null, "idem-1");
         Voucher.Validate(req).IsValid.Should().BeFalse();
     }
 
     [Fact]
     public void Voucher_UnknownMethod_Fails()
     {
-        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), 50m, "voucher", null, "idem-1");
+        var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), null, 50m, "voucher", null, "idem-1");
         Voucher.Validate(req).IsValid.Should().BeFalse();
     }
 }

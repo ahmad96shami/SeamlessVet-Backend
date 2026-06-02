@@ -60,10 +60,25 @@ public sealed class ReceiptVouchersSyncHandler : ISyncTableHandler
             throw new ConflictException("invalid_voucher_amount", "voucher amount must be greater than zero.");
         }
 
+        // M16: an optional farm scopes the credit to that farm's ledger; it must belong to the customer.
+        // The matching ledger_entry (carrying the farm ledger's id) arrives via /sync/ledger_entries.
+        var farmId = SyncBody.OptionalGuid(body, "farm_id");
+        if (farmId is { } scopedFarmId)
+        {
+            var farmOwner = await _db.Farms.Where(f => f.Id == scopedFarmId)
+                                .Select(f => (Guid?)f.CustomerId).FirstOrDefaultAsync(cancellationToken)
+                            ?? throw new NotFoundException("farm", scopedFarmId);
+            if (farmOwner != customerId)
+            {
+                throw new ConflictException("farm_customer_mismatch", "The farm does not belong to this customer.");
+            }
+        }
+
         var voucher = new ReceiptVoucher
         {
             Id = id,
             CustomerId = customerId,
+            FarmId = farmId,
             Amount = amount,
             Method = SyncBody.RequireString(body, "method", PaymentMethod.All, TableName),
             IssuedBy = issuedBy,

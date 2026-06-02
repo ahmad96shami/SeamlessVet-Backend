@@ -106,10 +106,15 @@ public sealed record InvoiceResponse(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-/// <summary>Receipt voucher (Sanad Qabd) issuance (M7 task 9).</summary>
+/// <summary>
+/// Receipt voucher (Sanad Qabd) issuance (M7 task 9). M16: an optional <see cref="FarmId"/> credits
+/// the payment to that farm's ledger instead of the customer's own ledger (the farm must belong to
+/// <see cref="CustomerId"/>).
+/// </summary>
 public sealed record ReceiptVoucherRequest(
     Guid? Id,
     Guid CustomerId,
+    Guid? FarmId,
     decimal Amount,
     string Method,
     string? Notes,
@@ -118,6 +123,7 @@ public sealed record ReceiptVoucherRequest(
 public sealed record ReceiptVoucherResponse(
     Guid Id,
     Guid CustomerId,
+    Guid? FarmId,
     decimal Amount,
     string Method,
     Guid IssuedBy,

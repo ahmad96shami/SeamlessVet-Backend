@@ -58,22 +58,37 @@ public sealed class ReceiptVouchersService
             throw new NotFoundException("customer", request.CustomerId);
         }
 
+        // M16: an optional farm must belong to this customer; the credit then routes to its ledger
+        // instead of the customer's own ledger.
+        if (request.FarmId is { } scopedFarmId)
+        {
+            var farmOwner = await _db.Farms.Where(f => f.Id == scopedFarmId)
+                                .Select(f => (Guid?)f.CustomerId).FirstOrDefaultAsync(cancellationToken)
+                            ?? throw new NotFoundException("farm", scopedFarmId);
+            if (farmOwner != request.CustomerId)
+            {
+                throw new ConflictException("farm_customer_mismatch",
+                    "The farm does not belong to this customer.");
+            }
+        }
+
         if (request.Id is { } rid && rid != Guid.Empty
             && await _db.ReceiptVouchers.IgnoreQueryFilters().AnyAsync(v => v.Id == rid, cancellationToken))
         {
             throw new ConflictException("receipt_voucher_id_collision", $"A receipt voucher with id '{rid}' already exists.");
         }
 
-        var ledgerId = await _db.Ledgers
-            .Where(l => l.CustomerId == request.CustomerId)
-            .Select(l => (Guid?)l.Id)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException("ledger", request.CustomerId);
+        var ledgerId = request.FarmId is { } farmLedgerId
+            ? await _db.Ledgers.Where(l => l.FarmId == farmLedgerId).Select(l => (Guid?)l.Id)
+                  .FirstOrDefaultAsync(cancellationToken) ?? throw new NotFoundException("ledger", farmLedgerId)
+            : await _db.Ledgers.Where(l => l.CustomerId == request.CustomerId).Select(l => (Guid?)l.Id)
+                  .FirstOrDefaultAsync(cancellationToken) ?? throw new NotFoundException("ledger", request.CustomerId);
 
         var voucher = new ReceiptVoucher
         {
             Id = request.Id ?? Guid.Empty,
             CustomerId = request.CustomerId,
+            FarmId = request.FarmId,
             Amount = Money(request.Amount),
             Method = request.Method,
             IssuedBy = userId,
