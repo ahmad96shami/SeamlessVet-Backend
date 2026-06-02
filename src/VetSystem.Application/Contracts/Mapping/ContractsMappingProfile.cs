@@ -10,6 +10,7 @@ public sealed class ContractsMappingProfile : IRegister
     {
         config.NewConfig<Contract, ContractResponse>();
         config.NewConfig<ContractMedicationPrice, ContractMedicationPriceResponse>();
+        config.NewConfig<ContractFarm, ContractFarmResponse>();
         config.NewConfig<Batch, BatchResponse>();
     }
 }
