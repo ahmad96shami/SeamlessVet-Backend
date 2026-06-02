@@ -66,6 +66,13 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
             }
         }
 
+        // M15 — optional farm attribution; must belong to the visit's customer.
+        var farmId = SyncBody.OptionalGuid(body, "farm_id");
+        if (farmId is { } fid)
+        {
+            await EnsureFarmBelongsToCustomerAsync(fid, customerId, cancellationToken);
+        }
+
         var visitNumber = SyncBody.OptionalString(body, "visit_number");
         if (!string.IsNullOrWhiteSpace(visitNumber))
         {
@@ -95,6 +102,7 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
             VisitType = SyncBody.RequireString(body, "visit_type", VisitType.All, TableName),
             VisitNumber = visitNumber,
             CustomerId = customerId,
+            FarmId = farmId,
             PetId = petId,
             DoctorId = doctorId,
             ReceptionistId = SyncBody.OptionalGuid(body, "receptionist_id"),
@@ -152,6 +160,17 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
             {
                 visit.StartedAt ??= _clock.UtcNow;
             }
+        }
+
+        // M15 — (re)attribute to a farm of the visit's customer.
+        if (body.TryGetProperty("farm_id", out _))
+        {
+            var newFarm = SyncBody.OptionalGuid(body, "farm_id");
+            if (newFarm is { } fid)
+            {
+                await EnsureFarmBelongsToCustomerAsync(fid, visit.CustomerId, cancellationToken);
+            }
+            visit.FarmId = newFarm;
         }
 
         ApplyMedicalFields(visit, body);
@@ -217,6 +236,20 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
         if (!await existsQuery)
         {
             throw new NotFoundException(entity, id);
+        }
+    }
+
+    private async Task EnsureFarmBelongsToCustomerAsync(Guid farmId, Guid customerId, CancellationToken cancellationToken)
+    {
+        var farmCustomerId = await _db.Farms
+            .Where(f => f.Id == farmId)
+            .Select(f => (Guid?)f.CustomerId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        if (farmCustomerId != customerId)
+        {
+            throw new ConflictException("farm_customer_mismatch", "The farm does not belong to the visit's customer.");
         }
     }
 }

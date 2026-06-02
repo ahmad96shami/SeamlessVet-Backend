@@ -123,6 +123,9 @@ builder.Services.AddScoped<VetSystem.API.Pets.PetsService>();
 builder.Services.AddScoped<VetSystem.Application.Ledgers.ILedgerService,
     VetSystem.Infrastructure.Ledgers.LedgerService>();
 
+// M15 — farms (attached to customers like pets; inherit the customer's doctor scope).
+builder.Services.AddScoped<VetSystem.API.Farms.FarmsService>();
+
 // M4 — inventory (warehouse + field), delta-only append-only movements.
 // M11 — the publisher now fans events out to IDomainEventHandler<T>s (notification handlers) in a
 // fresh scope per publish; handler registrations live with the SignalR/notification wiring below.
@@ -170,6 +173,7 @@ builder.Services.AddScoped<VetSystem.Application.Contracts.IPricingService,
     VetSystem.Infrastructure.Contracts.PricingService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractMedicationPricesService>();
+builder.Services.AddScoped<VetSystem.API.Contracts.ContractFarmsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
 
 // M9 — doctor entitlements & settlement lock. The fee-model + System A/B calculators and the toggle
@@ -254,6 +258,7 @@ builder.Services.AddScoped<ISyncDispatcher, SyncDispatcher>();
 builder.Services.AddScoped<ISyncTableHandler, SyncTestHandler>();
 builder.Services.AddScoped<ISyncTableHandler, CustomersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, PetsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, FarmsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, LedgersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, LedgerEntriesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, InventoryMovementsSyncHandler>();
@@ -271,6 +276,7 @@ builder.Services.AddScoped<ISyncTableHandler, PaymentsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ReceiptVouchersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractMedicationPricesSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, ContractFarmsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, BatchesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, DoctorEntitlementsSyncHandler>();
 builder.Services.AddScoped<IdempotencyKeyFilter>();

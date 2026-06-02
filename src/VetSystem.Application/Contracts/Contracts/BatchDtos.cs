@@ -11,6 +11,7 @@ public sealed record BatchCreateRequest(
     Guid? Id,
     Guid? ContractId,
     Guid CustomerId,
+    Guid? FarmId,
     Guid ResponsibleDoctorId,
     int AnimalCount,
     DateOnly StartDate,
@@ -30,6 +31,7 @@ public sealed record BatchCreateRequest(
 /// </summary>
 public sealed record BatchPatchRequest(
     Guid? ContractId,
+    Guid? FarmId,
     Guid? ResponsibleDoctorId,
     int? AnimalCount,
     DateOnly? StartDate,
@@ -46,6 +48,7 @@ public sealed record BatchResponse(
     Guid Id,
     Guid? ContractId,
     Guid CustomerId,
+    Guid? FarmId,
     Guid ResponsibleDoctorId,
     int AnimalCount,
     DateOnly StartDate,

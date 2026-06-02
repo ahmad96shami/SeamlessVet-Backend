@@ -94,6 +94,13 @@ public sealed class BatchesService
                 "contract", contractId);
         }
 
+        // M15 — the cycle's farm must belong to the batch's customer (customer_id stays a denormalized
+        // mirror of farm.customer_id).
+        if (request.FarmId is { } reqFarmId)
+        {
+            await RequireFarmBelongsToCustomerAsync(reqFarmId, request.CustomerId, cancellationToken);
+        }
+
         if (request.Id is { } id && id != Guid.Empty
             && await _db.Batches.IgnoreQueryFilters().AnyAsync(b => b.Id == id, cancellationToken))
         {
@@ -105,6 +112,7 @@ public sealed class BatchesService
             Id = request.Id ?? Guid.Empty,
             ContractId = request.ContractId,
             CustomerId = request.CustomerId,
+            FarmId = request.FarmId,
             ResponsibleDoctorId = request.ResponsibleDoctorId,
             AnimalCount = request.AnimalCount,
             StartDate = request.StartDate,
@@ -142,6 +150,13 @@ public sealed class BatchesService
         {
             await RequireExistsAsync(_db.Users.AnyAsync(u => u.Id == doctorId, cancellationToken), "doctor", doctorId);
             batch.ResponsibleDoctorId = doctorId;
+        }
+
+        // M15 — (re)attribute the cycle to a farm of its customer (customer_id is unchanged here).
+        if (request.FarmId is { } patchFarmId)
+        {
+            await RequireFarmBelongsToCustomerAsync(patchFarmId, batch.CustomerId, cancellationToken);
+            batch.FarmId = patchFarmId;
         }
 
         if (request.AnimalCount.HasValue) batch.AnimalCount = request.AnimalCount.Value;
@@ -201,6 +216,21 @@ public sealed class BatchesService
         if (!await existsQuery)
         {
             throw new NotFoundException(entity, id);
+        }
+    }
+
+    private async Task RequireFarmBelongsToCustomerAsync(Guid farmId, Guid customerId, CancellationToken cancellationToken)
+    {
+        var farmCustomerId = await _db.Farms
+            .Where(f => f.Id == farmId)
+            .Select(f => (Guid?)f.CustomerId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        if (farmCustomerId != customerId)
+        {
+            throw new ConflictException("farm_customer_mismatch",
+                "The farm does not belong to the batch's customer.");
         }
     }
 }
