@@ -106,10 +106,12 @@ public sealed class LedgerService : ILedgerService
         // The account just transitioned from owing (> 0) to fully settled (0): the last open invoice
         // is paid, so the account is ready to close and release entitlements (M11 task 12). Published
         // after the commit so handlers observe persisted state; a handler failure won't undo the entry.
-        if (previousBalance > 0m && newBalance == 0m)
+        // M16: farm-ledger addressing (resolve farm → owning customer) lands in SC7; for now only a
+        // customer ledger (CustomerId set) raises the notification.
+        if (previousBalance > 0m && newBalance == 0m && ledger.CustomerId is { } settledCustomerId)
         {
             await _events.PublishAsync(
-                new AccountReadyForSettlementEvent(ledger.EnvironmentId, ledger.CustomerId, ledger.Id, previousBalance),
+                new AccountReadyForSettlementEvent(ledger.EnvironmentId, settledCustomerId, ledger.Id, previousBalance),
                 cancellationToken);
         }
 

@@ -109,10 +109,11 @@ public sealed class CustomersService
             return [];
         }
 
+        // M16: still the customer's own ledger here; aggregate (own + Σ farm ledgers) lands in SC8.
         var ids = customers.Select(c => c.Id).ToList();
         var ledgers = await _db.Ledgers.AsNoTracking()
-            .Where(l => ids.Contains(l.CustomerId))
-            .ToDictionaryAsync(l => l.CustomerId, cancellationToken);
+            .Where(l => l.CustomerId != null && ids.Contains(l.CustomerId.Value))
+            .ToDictionaryAsync(l => l.CustomerId!.Value, cancellationToken);
 
         return customers.Select(c =>
         {
