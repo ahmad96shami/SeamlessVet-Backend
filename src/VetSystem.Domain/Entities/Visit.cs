@@ -18,6 +18,9 @@ public sealed class Visit : Entity
 
     public Guid CustomerId { get; set; }
 
+    /// <summary>The farm this visit attributes to (M15); null for a pet/clinic visit.</summary>
+    public Guid? FarmId { get; set; }
+
     /// <summary>Nullable: farm visits may treat a group rather than a single pet.</summary>
     public Guid? PetId { get; set; }
 

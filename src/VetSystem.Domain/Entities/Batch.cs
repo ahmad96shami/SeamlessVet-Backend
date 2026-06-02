@@ -15,6 +15,13 @@ public sealed class Batch : Entity
 
     public Guid CustomerId { get; set; }
 
+    /// <summary>
+    /// The farm this cycle runs on (M15). Nullable for backward compatibility; the data migration
+    /// backfills it to the customer's default farm. <see cref="CustomerId"/> is retained as a
+    /// denormalized mirror (<c>= farm.customer_id</c>).
+    /// </summary>
+    public Guid? FarmId { get; set; }
+
     public Guid ResponsibleDoctorId { get; set; }
 
     public int AnimalCount { get; set; }

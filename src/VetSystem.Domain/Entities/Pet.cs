@@ -10,6 +10,12 @@ public sealed class Pet : Entity
 {
     public Guid CustomerId { get; set; }
 
+    /// <summary>
+    /// Optional farm the pet belongs to (M15). Backward-compatible: existing pets keep
+    /// <see cref="CustomerId"/> with <c>FarmId</c> null. Always within the same customer.
+    /// </summary>
+    public Guid? FarmId { get; set; }
+
     public string Name { get; set; } = string.Empty;
 
     public string? Species { get; set; }

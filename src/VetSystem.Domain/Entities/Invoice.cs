@@ -16,6 +16,12 @@ public sealed class Invoice : Entity
     /// <summary>Null for a walk-in sale (no owner, no ledger posting).</summary>
     public Guid? CustomerId { get; set; }
 
+    /// <summary>
+    /// The farm this invoice attributes to (M15), derived from the originating visit/batch. Ledger
+    /// routing still posts to the customer ledger this milestone; the farm ledger flip lands in M16.
+    /// </summary>
+    public Guid? FarmId { get; set; }
+
     public Guid? VisitId { get; set; }
 
     /// <summary>Links the invoice into a batch's drug-profit calc (M8/M9). FK target lands in M8.</summary>
