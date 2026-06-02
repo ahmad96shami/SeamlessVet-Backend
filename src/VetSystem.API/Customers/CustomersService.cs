@@ -69,12 +69,32 @@ public sealed class CustomersService
             customers = customers.Where(c => c.AssignedDoctorId == doctorId);
         }
 
-        // Filter by the 1:1 ledger's status via a correlated subquery, so ordering + paging stay on
-        // the customer entity (which EF translates cleanly — projecting the entity into a wrapper and
-        // then composing OrderBy/Skip/Take on top does not).
+        // M16: filter by the customer's AGGREGATE ledger state (own ledger + all its farm ledgers) via
+        // correlated subqueries, so ordering + paging stay on the customer entity. "Owned ledgers of c"
+        // = the own ledger (l.CustomerId == c.Id) plus every farm ledger whose farm belongs to c.
+        //   closed   = no owned ledger is non-closed (every one is closed);
+        //   has_debt = Σ owned balances > 0;
+        //   open     = at least one owned ledger is non-closed AND the aggregate is not in debt.
         if (ledgerStatus is { } status)
         {
-            customers = customers.Where(c => _db.Ledgers.Any(l => l.CustomerId == c.Id && l.Status == status));
+            customers = status switch
+            {
+                LedgerStatus.Closed => customers.Where(c =>
+                    !_db.Ledgers.Any(l =>
+                        (l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
+                        && l.Status != LedgerStatus.Closed)),
+                LedgerStatus.HasDebt => customers.Where(c =>
+                    _db.Ledgers
+                        .Where(l => l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
+                        .Sum(l => l.Balance) > 0m),
+                _ => customers.Where(c =>
+                    _db.Ledgers.Any(l =>
+                        (l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
+                        && l.Status != LedgerStatus.Closed)
+                    && _db.Ledgers
+                        .Where(l => l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
+                        .Sum(l => l.Balance) <= 0m),
+            };
         }
 
         var page = await customers
@@ -93,13 +113,34 @@ public sealed class CustomersService
             .FirstOrDefaultAsync(c => c.Id == id, cancellationToken)
             ?? throw new NotFoundException("customer", id);
 
-        var ledger = await _db.Ledgers.AsNoTracking()
-            .FirstOrDefaultAsync(l => l.CustomerId == id, cancellationToken);
+        var own = await _db.Ledgers.AsNoTracking()
+            .Where(l => l.CustomerId == id)
+            .Select(l => new OwnerLedger(l.Balance, l.Status))
+            .FirstOrDefaultAsync(cancellationToken);
 
-        return ToResponse(customer, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
+        // Per-farm breakdown (detail only): each active farm's ledger, owner-joined.
+        var farmLedgers = (await _db.Ledgers.AsNoTracking()
+                .Where(l => l.FarmId != null)
+                .Join(
+                    _db.Farms.AsNoTracking().Where(f => f.CustomerId == id),
+                    l => l.FarmId, f => f.Id,
+                    (l, f) => new { FarmId = f.Id, FarmName = f.Name, LedgerId = l.Id, l.Balance, l.Status, l.ClosedAt })
+                .ToListAsync(cancellationToken))
+            .Select(x => new CustomerFarmLedger(x.FarmId, x.FarmName, x.LedgerId, x.Balance, x.Status, x.ClosedAt))
+            .OrderBy(fl => fl.FarmName)
+            .ToList();
+
+        var ownBalance = own?.Balance ?? 0m;
+        var (aggregate, aggregateStatus) = Aggregate(
+            ownBalance, own?.Status, farmLedgers.Select(f => new OwnerLedger(f.Balance, f.Status)).ToList());
+
+        return ToResponse(customer, aggregate, aggregateStatus, ownBalance, farmLedgers);
     }
 
-    /// <summary>Loads the 1:1 ledger balance + status for a page of customers in a single query.</summary>
+    /// <summary>
+    /// Loads each customer's aggregate ledger state (own ledger + all its farm ledgers) for the page
+    /// in two queries (own ledgers, then farm ledgers owner-joined), then folds them per customer.
+    /// </summary>
     private async Task<IReadOnlyList<CustomerResponse>> EnrichAsync(
         IReadOnlyList<Customer> customers,
         CancellationToken cancellationToken)
@@ -109,22 +150,70 @@ public sealed class CustomersService
             return [];
         }
 
-        // M16: still the customer's own ledger here; aggregate (own + Σ farm ledgers) lands in SC8.
         var ids = customers.Select(c => c.Id).ToList();
-        var ledgers = await _db.Ledgers.AsNoTracking()
+
+        var ownByCustomer = await _db.Ledgers.AsNoTracking()
             .Where(l => l.CustomerId != null && ids.Contains(l.CustomerId.Value))
-            .ToDictionaryAsync(l => l.CustomerId!.Value, cancellationToken);
+            .Select(l => new { CustomerId = l.CustomerId!.Value, l.Balance, l.Status })
+            .ToDictionaryAsync(o => o.CustomerId, o => new OwnerLedger(o.Balance, o.Status), cancellationToken);
+
+        var farmRows = await _db.Ledgers.AsNoTracking()
+            .Where(l => l.FarmId != null)
+            .Join(
+                _db.Farms.AsNoTracking().Where(f => ids.Contains(f.CustomerId)),
+                l => l.FarmId, f => f.Id,
+                (l, f) => new { f.CustomerId, l.Balance, l.Status })
+            .ToListAsync(cancellationToken);
+        var farmsByCustomer = farmRows
+            .GroupBy(f => f.CustomerId)
+            .ToDictionary(g => g.Key, g => g.Select(x => new OwnerLedger(x.Balance, x.Status)).ToList());
 
         return customers.Select(c =>
         {
-            ledgers.TryGetValue(c.Id, out var ledger);
-            return ToResponse(c, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
+            ownByCustomer.TryGetValue(c.Id, out var own);
+            farmsByCustomer.TryGetValue(c.Id, out var farms);
+            var ownBalance = own?.Balance ?? 0m;
+            var (aggregate, aggregateStatus) = Aggregate(ownBalance, own?.Status, farms ?? []);
+            return ToResponse(c, aggregate, aggregateStatus, ownBalance, farmLedgers: null);
         }).ToList();
     }
 
-    /// <summary>Maps the base customer fields via Mapster, then layers on the joined ledger state.</summary>
-    private CustomerResponse ToResponse(Customer customer, decimal balance, string ledgerStatus) =>
-        _mapper.Map<CustomerResponse>(customer) with { Balance = balance, LedgerStatus = ledgerStatus };
+    /// <summary>
+    /// Folds an owner's own ledger + its farm ledgers into the aggregate balance and status: balance
+    /// is the simple sum; status is <c>closed</c> only when every owning ledger is closed, else
+    /// <c>has_debt</c> when the aggregate is positive, else <c>open</c>.
+    /// </summary>
+    private static (decimal Balance, string Status) Aggregate(
+        decimal ownBalance, string? ownStatus, IReadOnlyList<OwnerLedger> farmLedgers)
+    {
+        var aggregate = ownBalance + farmLedgers.Sum(f => f.Balance);
+        var hasAnyLedger = ownStatus is not null || farmLedgers.Count > 0;
+        var allClosed = (ownStatus is null || ownStatus == LedgerStatus.Closed)
+                        && farmLedgers.All(f => f.Status == LedgerStatus.Closed);
+
+        var status = hasAnyLedger && allClosed ? LedgerStatus.Closed
+            : aggregate > 0m ? LedgerStatus.HasDebt
+            : LedgerStatus.Open;
+
+        return (aggregate, status);
+    }
+
+    /// <summary>Maps the base customer fields via Mapster, then layers on the aggregated ledger state.</summary>
+    private CustomerResponse ToResponse(
+        Customer customer,
+        decimal aggregateBalance,
+        string aggregateStatus,
+        decimal ownBalance,
+        IReadOnlyList<CustomerFarmLedger>? farmLedgers) =>
+        _mapper.Map<CustomerResponse>(customer) with
+        {
+            Balance = aggregateBalance,
+            LedgerStatus = aggregateStatus,
+            OwnBalance = ownBalance,
+            FarmLedgers = farmLedgers,
+        };
+
+    private sealed record OwnerLedger(decimal Balance, string Status);
 
     public async Task<CustomerResponse> CreateAsync(CustomerRequest request, CancellationToken cancellationToken)
     {
@@ -177,8 +266,9 @@ public sealed class CustomersService
                 "A customer with this primary phone already exists in this environment.");
         }
 
-        // The ledger was created in the same transaction above — balance 0, status open.
-        return ToResponse(entity, ledger.Balance, ledger.Status);
+        // The ledger was created in the same transaction above — balance 0, status open; a new
+        // customer has no farms yet, so aggregate == own.
+        return ToResponse(entity, ledger.Balance, ledger.Status, ledger.Balance, farmLedgers: null);
     }
 
     public async Task<CustomerResponse> UpdateAsync(
@@ -209,9 +299,12 @@ public sealed class CustomersService
                 "A customer with this primary phone already exists in this environment.");
         }
 
+        // The caller (PATCH endpoint) only reads the id; return the own ledger as the balance — a CRUD
+        // update never changes ledger state, and the aggregate read lives on GET.
         var ledger = await _db.Ledgers.AsNoTracking()
             .FirstOrDefaultAsync(l => l.CustomerId == entity.Id, cancellationToken);
-        return ToResponse(entity, ledger?.Balance ?? 0m, ledger?.Status ?? LedgerStatus.Open);
+        var ownBalance = ledger?.Balance ?? 0m;
+        return ToResponse(entity, ownBalance, ledger?.Status ?? LedgerStatus.Open, ownBalance, farmLedgers: null);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)

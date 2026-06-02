@@ -29,10 +29,13 @@ public sealed record CustomerPatchRequest(
     Guid? AssignedDoctorId);
 
 /// <summary>
-/// Customer read projection. <c>Balance</c> and <c>LedgerStatus</c> are joined from the 1:1
-/// <see cref="Ledger"/> (created alongside the customer) so the web list can show account state
-/// at a glance and filter by it, without an N+1 statement call per row. Positive balance = the
-/// customer owes the clinic. These two fields are read-only — the ledger is server-authoritative.
+/// Customer read projection. M16: <c>Balance</c> and <c>LedgerStatus</c> are the customer's
+/// <b>aggregate</b> across its own ledger (pet/clinic charges) and all its farm ledgers — own balance
+/// + Σ farm balances; status is <c>closed</c> only when every owning ledger is closed, else
+/// <c>has_debt</c> when the aggregate is positive, else <c>open</c>. Positive balance = the customer
+/// owes the clinic. <c>OwnBalance</c> is the customer's own (non-farm) ledger alone. <c>FarmLedgers</c>
+/// is the per-farm breakdown — populated by the single-customer detail read, null on the list. All of
+/// these are read-only — the ledgers are server-authoritative.
 /// </summary>
 public sealed record CustomerResponse(
     Guid Id,
@@ -47,5 +50,16 @@ public sealed record CustomerResponse(
     Guid? AssignedDoctorId,
     decimal Balance,
     string LedgerStatus,
+    decimal OwnBalance,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    IReadOnlyList<CustomerFarmLedger>? FarmLedgers = null);
+
+/// <summary>M16 — one farm's ledger state in the customer detail breakdown.</summary>
+public sealed record CustomerFarmLedger(
+    Guid FarmId,
+    string FarmName,
+    Guid LedgerId,
+    decimal Balance,
+    string Status,
+    DateTimeOffset? ClosedAt);
