@@ -162,6 +162,7 @@ public sealed class InvoicesService
             Id = request.Id ?? Guid.Empty,
             InvoiceType = InvoiceType.ExamFee,
             CustomerId = visit.CustomerId,
+            FarmId = await ResolveInvoiceFarmIdAsync(visit, visit.BatchId, cancellationToken),
             VisitId = visit.Id,
             BatchId = visit.BatchId,
             Number = normalizedNumber,
@@ -236,6 +237,7 @@ public sealed class InvoicesService
             Id = Guid.Empty,
             InvoiceType = original.InvoiceType,
             CustomerId = original.CustomerId,
+            FarmId = original.FarmId,
             VisitId = original.VisitId,
             BatchId = original.BatchId,
             Number = null, // server-side reversal marker; carries no client-prefixed number
@@ -418,6 +420,7 @@ public sealed class InvoicesService
             Id = requestId ?? Guid.Empty,
             InvoiceType = invoiceType,
             CustomerId = customerId,
+            FarmId = await ResolveInvoiceFarmIdAsync(visit, batchId, cancellationToken),
             VisitId = visit?.Id,
             BatchId = batchId,
             Number = normalizedNumber,
@@ -704,6 +707,7 @@ public sealed class InvoicesService
             invoice.Id,
             invoice.InvoiceType,
             invoice.CustomerId,
+            invoice.FarmId,
             invoice.VisitId,
             invoice.BatchId,
             invoice.Number,
@@ -719,6 +723,28 @@ public sealed class InvoicesService
             payments.Select(_mapper.Map<PaymentResponse>).ToList(),
             invoice.CreatedAt,
             invoice.UpdatedAt);
+    }
+
+    /// <summary>
+    /// M15 — the farm an invoice attributes to: the originating visit's farm, else the batch's farm,
+    /// else null (POS / walk-in / in-clinic with no farm). No ledger-routing change this milestone.
+    /// </summary>
+    private async Task<Guid?> ResolveInvoiceFarmIdAsync(Visit? visit, Guid? batchId, CancellationToken cancellationToken)
+    {
+        if (visit?.FarmId is { } visitFarm)
+        {
+            return visitFarm;
+        }
+
+        if (batchId is { } bid)
+        {
+            return await _db.Batches
+                .Where(b => b.Id == bid)
+                .Select(b => b.FarmId)
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        return null;
     }
 
     private async Task<Visit?> ResolveVisitAsync(Guid? visitId, CancellationToken cancellationToken)

@@ -102,6 +102,12 @@ public sealed class VisitsService
             }
         }
 
+        // M15 — attribute the visit to a farm of the same customer (no ledger change this milestone).
+        if (request.FarmId is { } farmId)
+        {
+            await RequireFarmBelongsToCustomerAsync(farmId, request.CustomerId, cancellationToken);
+        }
+
         var visitNumber = string.IsNullOrWhiteSpace(request.VisitNumber) ? null : request.VisitNumber.Trim();
         if (visitNumber is not null)
         {
@@ -128,6 +134,7 @@ public sealed class VisitsService
             VisitType = request.VisitType,
             VisitNumber = visitNumber,
             CustomerId = request.CustomerId,
+            FarmId = request.FarmId,
             PetId = request.PetId,
             DoctorId = request.DoctorId,
             ReceptionistId = request.ReceptionistId,
@@ -180,6 +187,13 @@ public sealed class VisitsService
 
             visit.Status = target;
             visit.StartedAt ??= _clock.UtcNow;
+        }
+
+        // M15 — (re)attribute the visit to a farm of its customer.
+        if (request.FarmId is { } farmId)
+        {
+            await RequireFarmBelongsToCustomerAsync(farmId, visit.CustomerId, cancellationToken);
+            visit.FarmId = farmId;
         }
 
         if (request.ChiefComplaint is not null) visit.ChiefComplaint = request.ChiefComplaint;
@@ -242,6 +256,21 @@ public sealed class VisitsService
         if (!await existsQuery)
         {
             throw new NotFoundException(entity, id);
+        }
+    }
+
+    private async Task RequireFarmBelongsToCustomerAsync(Guid farmId, Guid customerId, CancellationToken cancellationToken)
+    {
+        var farmCustomerId = await _db.Farms
+            .Where(f => f.Id == farmId)
+            .Select(f => (Guid?)f.CustomerId)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        if (farmCustomerId != customerId)
+        {
+            throw new ConflictException("farm_customer_mismatch",
+                "The farm does not belong to the visit's customer.");
         }
     }
 }

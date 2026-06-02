@@ -89,6 +89,7 @@ public sealed record InvoiceResponse(
     Guid Id,
     string InvoiceType,
     Guid? CustomerId,
+    Guid? FarmId,
     Guid? VisitId,
     Guid? BatchId,
     string? Number,

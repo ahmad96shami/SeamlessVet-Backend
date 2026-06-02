@@ -11,6 +11,7 @@ public sealed record VisitCreateRequest(
     string VisitType,
     string? VisitNumber,
     Guid CustomerId,
+    Guid? FarmId,
     Guid? PetId,
     Guid DoctorId,
     Guid? ReceptionistId,
@@ -40,6 +41,7 @@ public sealed record VisitCreateRequest(
 /// </summary>
 public sealed record VisitPatchRequest(
     string? Status,
+    Guid? FarmId,
     string? ChiefComplaint,
     string? Symptoms,
     decimal? Temperature,
@@ -58,6 +60,7 @@ public sealed record VisitResponse(
     string VisitType,
     string? VisitNumber,
     Guid CustomerId,
+    Guid? FarmId,
     Guid? PetId,
     Guid? BatchId,
     Guid? ContractId,
