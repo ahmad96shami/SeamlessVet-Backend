@@ -83,6 +83,7 @@ streams:
       - SELECT * FROM procedures       WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM prescriptions    WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM daily_follow_ups WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
+      - SELECT * FROM night_stays      WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM attachments      WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM vaccinations     WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM invoices         WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL

@@ -48,6 +48,11 @@ public sealed class DoctorScopeSyncRulesTests
             "ledgers are scoped by the by_customer stream");
         contents.Should().MatchRegex(@"FROM\s+ledger_entries\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)",
             "ledger_entries reach customer_id via the M14 denormalized scope key");
+
+        // M17 — night stays (مبيت) are children of the doctor's own visits (by_visit stream).
+        contents.Should().Contain("by_visit:", "a visit's clinical children live in the `by_visit` stream");
+        contents.Should().MatchRegex(@"FROM\s+night_stays\s+WHERE\s+visit_id\s+IN\s+\(SELECT\s+visit_id\s+FROM\s+my_visits\)",
+            "night_stays (M17) are scoped through the doctor's own visits");
     }
 
     [Fact]
