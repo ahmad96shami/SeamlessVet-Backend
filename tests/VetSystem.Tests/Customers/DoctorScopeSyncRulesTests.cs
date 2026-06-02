@@ -9,13 +9,14 @@ namespace VetSystem.Tests.Customers;
 /// <summary>
 /// M3 task 15 / M14 — confirms PowerSync exposes a doctor's assigned customers (and their pets /
 /// ledger / ledger_entries) without leaking other doctors' rows. PowerSync forbids JOINs, so M14
-/// reworked this into parameter-query buckets: the <c>doctor</c> bucket selects the doctor's own
-/// customers (assigned_doctor_id), and the <c>by_customer</c> bucket — parameterized by those customer
-/// ids — pulls their children by a single-table <c>customer_id = bucket.customer_id</c> filter
-/// (ledger_entries reaching customer_id via the M14 denormalized scope key). Two checks:
+/// reworked this into Sync Streams: the <c>doctor_owned</c> stream selects the doctor's own
+/// customers (assigned_doctor_id = auth.user_id()), and the <c>by_customer</c> stream — anchored by the
+/// <c>my_customers</c> CTE — pulls their children by a single-table
+/// <c>customer_id IN (SELECT customer_id FROM my_customers)</c> filter (ledger_entries reaching
+/// customer_id via the M14 denormalized scope key). Two checks:
 ///
-/// 1. <c>powersync/sync-rules.yaml</c> declares the <c>doctor</c> + <c>by_customer</c> buckets with the
-///    expected parameter queries and single-table (JOIN-free) data filters.
+/// 1. <c>powersync/sync-rules.yaml</c> declares the <c>doctor_owned</c> + <c>by_customer</c> streams with
+///    the expected parameter queries and single-table (JOIN-free) data filters.
 /// 2. The same scope, evaluated against Postgres (what PowerSync's replication mirrors), returns only
 ///    the rows belonging to the doctor whose id matches the bucket parameter.
 /// </summary>
@@ -28,22 +29,24 @@ public sealed class DoctorScopeSyncRulesTests
         var rulesPath = LocateSyncRulesFile();
         var contents = File.ReadAllText(rulesPath);
 
-        contents.Should().Contain("request.user_id()", "scoping must be parameterised by the JWT user");
-        contents.Should().Contain("doctor:", "the doctor's own entities live in the `doctor` bucket");
-        contents.Should().Contain("by_customer:", "a customer's children live in the `by_customer` bucket");
+        contents.Should().Contain("auth.user_id()", "scoping must be parameterised by the JWT user (Sync Streams syntax)");
+        contents.Should().Contain("doctor_owned:", "the doctor's own entities live in the `doctor_owned` stream");
+        contents.Should().Contain("by_customer:", "a customer's children live in the `by_customer` stream");
 
-        // The doctor bucket selects the doctor's own customers; by_customer is parameterized by them.
-        contents.Should().MatchRegex(@"FROM\s+customers\s+WHERE\s+assigned_doctor_id\s*=\s*bucket\.doctor_id",
-            "the doctor bucket selects customers assigned to the doctor (PRD §8.6)");
-        contents.Should().Contain("assigned_doctor_id = request.user_id()",
-            "by_customer is parameterised by the doctor's assigned customers");
+        // The doctor_owned stream selects the doctor's own customers; by_customer is parameterized by them.
+        contents.Should().MatchRegex(@"FROM\s+customers\s+WHERE\s+assigned_doctor_id\s*=\s*auth\.user_id\(\)",
+            "the doctor_owned stream selects customers assigned to the doctor (PRD §8.6)");
+        contents.Should().MatchRegex(@"my_customers:\s*SELECT\s+id\s+AS\s+customer_id\s+FROM\s+customers\s+WHERE\s+assigned_doctor_id\s*=\s*auth\.user_id\(\)",
+            "the my_customers CTE anchors the by_customer stream to the doctor's assigned customers");
 
-        // Children are reached by a single-table filter on the bucket parameter — never a JOIN.
-        contents.Should().MatchRegex(@"FROM\s+pets\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
-            "pets are scoped by the by_customer parameter");
-        contents.Should().MatchRegex(@"FROM\s+ledgers\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
-            "ledgers are scoped by the by_customer parameter");
-        contents.Should().MatchRegex(@"FROM\s+ledger_entries\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id",
+        // Children are reached by a single-table filter against the my_customers CTE — never a JOIN.
+        contents.Should().MatchRegex(@"FROM\s+pets\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)",
+            "pets are scoped by the by_customer stream");
+        contents.Should().MatchRegex(@"FROM\s+farms\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)",
+            "farms (M15) are scoped by the by_customer stream, inheriting the customer's doctor");
+        contents.Should().MatchRegex(@"FROM\s+ledgers\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)",
+            "ledgers are scoped by the by_customer stream");
+        contents.Should().MatchRegex(@"FROM\s+ledger_entries\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)",
             "ledger_entries reach customer_id via the M14 denormalized scope key");
     }
 

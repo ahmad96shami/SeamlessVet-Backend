@@ -5,9 +5,10 @@ namespace VetSystem.Tests.Financial;
 /// <summary>
 /// M7 task 14 / M14 — confirms <c>powersync/sync-rules.yaml</c> scopes the financial tables to the
 /// field doctor. PowerSync forbids JOINs, so invoices are reached through the <c>by_customer</c> /
-/// <c>by_visit</c> parameter buckets and their children (invoice_items, payments) via the denormalized
-/// <c>customer_id</c>/<c>visit_id</c> scope keys (M14_SyncScopeDenormalization); receipt_vouchers ride
-/// the native customer_id. No JOIN may leak another doctor's rows.
+/// <c>by_visit</c> Sync Streams and their children (invoice_items, payments) via the denormalized
+/// <c>customer_id</c>/<c>visit_id</c> scope keys (M14_SyncScopeDenormalization) filtered against the
+/// <c>my_customers</c>/<c>my_visits</c> CTEs; receipt_vouchers ride the native customer_id. No JOIN may
+/// leak another doctor's rows.
 /// </summary>
 public sealed class FinancialSyncRulesTests
 {
@@ -21,13 +22,13 @@ public sealed class FinancialSyncRulesTests
         contents.Should().MatchRegex(@"FROM\s+payments", "must sync payments");
         contents.Should().MatchRegex(@"FROM\s+receipt_vouchers", "must sync receipt_vouchers");
 
-        // Children reach their scope key directly (no JOIN) via both the customer and visit buckets.
-        contents.Should().MatchRegex(@"FROM\s+invoice_items\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id");
-        contents.Should().MatchRegex(@"FROM\s+invoice_items\s+WHERE\s+visit_id\s*=\s*bucket\.visit_id");
-        contents.Should().MatchRegex(@"FROM\s+payments\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id");
-        contents.Should().MatchRegex(@"FROM\s+payments\s+WHERE\s+visit_id\s*=\s*bucket\.visit_id");
-        contents.Should().MatchRegex(@"FROM\s+receipt_vouchers\s+WHERE\s+customer_id\s*=\s*bucket\.customer_id");
-        contents.Should().MatchRegex(@"FROM\s+invoices\s+WHERE\s+visit_id\s*=\s*bucket\.visit_id",
+        // Children reach their scope key directly (no JOIN) via both the customer and visit streams.
+        contents.Should().MatchRegex(@"FROM\s+invoice_items\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)");
+        contents.Should().MatchRegex(@"FROM\s+invoice_items\s+WHERE\s+visit_id\s+IN\s+\(SELECT\s+visit_id\s+FROM\s+my_visits\)");
+        contents.Should().MatchRegex(@"FROM\s+payments\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)");
+        contents.Should().MatchRegex(@"FROM\s+payments\s+WHERE\s+visit_id\s+IN\s+\(SELECT\s+visit_id\s+FROM\s+my_visits\)");
+        contents.Should().MatchRegex(@"FROM\s+receipt_vouchers\s+WHERE\s+customer_id\s+IN\s+\(SELECT\s+customer_id\s+FROM\s+my_customers\)");
+        contents.Should().MatchRegex(@"FROM\s+invoices\s+WHERE\s+visit_id\s+IN\s+\(SELECT\s+visit_id\s+FROM\s+my_visits\)",
             "field invoices tied to the doctor's own visits must also reach the device");
     }
 
