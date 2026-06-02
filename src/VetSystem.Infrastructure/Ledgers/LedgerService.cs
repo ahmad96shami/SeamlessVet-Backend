@@ -106,13 +106,26 @@ public sealed class LedgerService : ILedgerService
         // The account just transitioned from owing (> 0) to fully settled (0): the last open invoice
         // is paid, so the account is ready to close and release entitlements (M11 task 12). Published
         // after the commit so handlers observe persisted state; a handler failure won't undo the entry.
-        // M16: farm-ledger addressing (resolve farm → owning customer) lands in SC7; for now only a
-        // customer ledger (CustomerId set) raises the notification.
-        if (previousBalance > 0m && newBalance == 0m && ledger.CustomerId is { } settledCustomerId)
+        // M16: a farm ledger resolves to its owning customer for addressing (notifications target the
+        // env's admins/accountants; the customer + farm ids ride in the payload).
+        if (previousBalance > 0m && newBalance == 0m)
         {
-            await _events.PublishAsync(
-                new AccountReadyForSettlementEvent(ledger.EnvironmentId, settledCustomerId, ledger.Id, previousBalance),
-                cancellationToken);
+            var ownerCustomerId = ledger.CustomerId;
+            if (ledger.FarmId is { } farmId)
+            {
+                ownerCustomerId = await _db.Farms
+                    .Where(f => f.Id == farmId)
+                    .Select(f => (Guid?)f.CustomerId)
+                    .FirstOrDefaultAsync(cancellationToken);
+            }
+
+            if (ownerCustomerId is { } settledCustomerId)
+            {
+                await _events.PublishAsync(
+                    new AccountReadyForSettlementEvent(
+                        ledger.EnvironmentId, settledCustomerId, ledger.FarmId, ledger.Id, previousBalance),
+                    cancellationToken);
+            }
         }
 
         return _mapper.Map<LedgerEntryResponse>(entry);
@@ -124,11 +137,6 @@ public sealed class LedgerService : ILedgerService
         DateTimeOffset? to,
         CancellationToken cancellationToken)
     {
-        if (from is not null && to is not null && from > to)
-        {
-            throw new ConflictException("statement_invalid_window", "'from' must be on or before 'to'.");
-        }
-
         var customer = await _db.Customers
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.Id == customerId, cancellationToken)
@@ -138,6 +146,53 @@ public sealed class LedgerService : ILedgerService
             .AsNoTracking()
             .FirstOrDefaultAsync(l => l.CustomerId == customerId, cancellationToken)
             ?? throw new NotFoundException("ledger", customerId);
+
+        return await BuildStatementAsync(
+            ledger, customer.Id, customer.FullName, farmId: null, farmName: null, from, to, cancellationToken);
+    }
+
+    public async Task<StatementResponse> GetFarmStatementAsync(
+        Guid farmId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken cancellationToken)
+    {
+        var farm = await _db.Farms
+            .AsNoTracking()
+            .FirstOrDefaultAsync(f => f.Id == farmId, cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        var customerName = await _db.Customers
+            .AsNoTracking()
+            .Where(c => c.Id == farm.CustomerId)
+            .Select(c => c.FullName)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("customer", farm.CustomerId);
+
+        var ledger = await _db.Ledgers
+            .AsNoTracking()
+            .FirstOrDefaultAsync(l => l.FarmId == farmId, cancellationToken)
+            ?? throw new NotFoundException("ledger", farmId);
+
+        return await BuildStatementAsync(
+            ledger, farm.CustomerId, customerName, farm.Id, farm.Name, from, to, cancellationToken);
+    }
+
+    /// <summary>Shared statement core (M3 customer + M16 farm): opening/closing balance over the window.</summary>
+    private async Task<StatementResponse> BuildStatementAsync(
+        Ledger ledger,
+        Guid customerId,
+        string customerName,
+        Guid? farmId,
+        string? farmName,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken cancellationToken)
+    {
+        if (from is not null && to is not null && from > to)
+        {
+            throw new ConflictException("statement_invalid_window", "'from' must be on or before 'to'.");
+        }
 
         // Opening balance = balance of the most recent entry strictly before `from`.
         // If no `from` is given, opening is 0 — the ledger starts with no debt.
@@ -168,8 +223,10 @@ public sealed class LedgerService : ILedgerService
         var closingBalance = entries.Count > 0 ? entries[^1].BalanceAfter : openingBalance;
 
         return new StatementResponse(
-            CustomerId: customer.Id,
-            CustomerName: customer.FullName,
+            CustomerId: customerId,
+            CustomerName: customerName,
+            FarmId: farmId,
+            FarmName: farmName,
             LedgerId: ledger.Id,
             OpeningBalance: openingBalance,
             ClosingBalance: closingBalance,

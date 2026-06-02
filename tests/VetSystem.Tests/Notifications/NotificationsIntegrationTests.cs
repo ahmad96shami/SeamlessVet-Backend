@@ -53,7 +53,7 @@ public sealed class NotificationsIntegrationTests
 
         var publisher = factory.Services.GetRequiredService<IDomainEventPublisher>();
         await publisher.PublishAsync(
-            new AccountReadyForSettlementEvent(scope.EnvironmentId, Guid.CreateVersion7(), Guid.CreateVersion7(), 100m),
+            new AccountReadyForSettlementEvent(scope.EnvironmentId, Guid.CreateVersion7(), null, Guid.CreateVersion7(), 100m),
             CancellationToken.None);
 
         var recipients = await RecipientsOfTypeAsync(scope, NotificationType.AccountReadyForSettlement);

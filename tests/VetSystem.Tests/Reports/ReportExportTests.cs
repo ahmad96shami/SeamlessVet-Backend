@@ -139,7 +139,8 @@ public sealed class ReportExportTests
             PartnerAllocations: [new ProfitAllocation(Guid.NewGuid(), "شريك أ", 100m, 2160m)])));
 
         yield return ("farm-account-status", ReportDocuments.FarmAccountStatus(new StatementResponse(
-            CustomerId: Guid.NewGuid(), CustomerName: "مزرعة النور", LedgerId: Guid.NewGuid(),
+            CustomerId: Guid.NewGuid(), CustomerName: "مزرعة النور", FarmId: null, FarmName: null,
+            LedgerId: Guid.NewGuid(),
             OpeningBalance: 0m, ClosingBalance: 350m, Status: LedgerStatus.HasDebt,
             From: Now, To: Now.AddMonths(1),
             Entries:

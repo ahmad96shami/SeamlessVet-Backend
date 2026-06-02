@@ -36,6 +36,7 @@ public sealed class AccountReadyForSettlementHandler : IDomainEventHandler<Accou
                 Payload: new
                 {
                     domainEvent.CustomerId,
+                    domainEvent.FarmId,
                     domainEvent.LedgerId,
                     domainEvent.PreviousBalance,
                 }),

@@ -38,12 +38,17 @@ public sealed record LedgerResponse(
     DateTimeOffset UpdatedAt);
 
 /// <summary>
-/// Account statement DTO returned by <c>GET /customers/{id}/statement</c> (M3 task 8).
-/// Drives the WhatsApp/email/print client paths — contains everything the renderer needs.
+/// Account statement DTO returned by <c>GET /customers/{id}/statement</c> (M3 task 8) and
+/// <c>GET /farms/{id}/statement</c> (M16). Drives the WhatsApp/email/print client paths — contains
+/// everything the renderer needs. <see cref="CustomerId"/>/<see cref="CustomerName"/> are the owning
+/// customer in both cases; <see cref="FarmId"/>/<see cref="FarmName"/> are set only for a farm
+/// statement (null for a customer statement).
 /// </summary>
 public sealed record StatementResponse(
     Guid CustomerId,
     string CustomerName,
+    Guid? FarmId,
+    string? FarmName,
     Guid LedgerId,
     decimal OpeningBalance,
     decimal ClosingBalance,

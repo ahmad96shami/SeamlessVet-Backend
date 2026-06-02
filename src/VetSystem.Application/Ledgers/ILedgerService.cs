@@ -31,4 +31,15 @@ public interface ILedgerService
         DateTimeOffset? from,
         DateTimeOffset? to,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// M16 — the same statement for a farm's ledger (<c>GET /farms/{id}/statement</c>). The owning
+    /// customer rides along in <see cref="StatementResponse.CustomerId"/>/<c>CustomerName</c>; the
+    /// farm is identified by <see cref="StatementResponse.FarmId"/>/<c>FarmName</c>.
+    /// </summary>
+    Task<StatementResponse> GetFarmStatementAsync(
+        Guid farmId,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken cancellationToken);
 }

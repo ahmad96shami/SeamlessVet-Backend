@@ -1,6 +1,7 @@
 using VetSystem.API.Farms;
 using VetSystem.API.Filters;
 using VetSystem.Application.Farms.Contracts;
+using VetSystem.Application.Ledgers;
 using VetSystem.Domain.Entities;
 
 namespace VetSystem.API.Endpoints.Farms;
@@ -42,6 +43,10 @@ public sealed class FarmsModule : IEndpointModule
             .RequirePermission(PermissionKey.CustomersWrite)
             .AddEndpointFilter(new IdempotencyKeyFilter(EntityType))
             .WithName("Farms_Delete");
+
+        // M16 — the farm's ledger statement (mirrors the customer statement), ready for WhatsApp/print.
+        group.MapGet("/{id:guid}/statement", Statement)
+            .WithName("Farms_Statement");
     }
 
     private static async Task<IResult> List(
@@ -85,5 +90,16 @@ public sealed class FarmsModule : IEndpointModule
     {
         await svc.DeleteAsync(id, cancellationToken);
         return TypedResults.NoContent();
+    }
+
+    private static async Task<IResult> Statement(
+        Guid id,
+        ILedgerService ledgers,
+        DateTimeOffset? from,
+        DateTimeOffset? to,
+        CancellationToken cancellationToken)
+    {
+        var statement = await ledgers.GetFarmStatementAsync(id, from, to, cancellationToken);
+        return TypedResults.Ok(statement);
     }
 }
