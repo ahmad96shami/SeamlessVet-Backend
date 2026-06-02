@@ -195,7 +195,7 @@ public sealed class InvoicesService
 
         await _db.SaveChangesAsync(cancellationToken);
 
-        await PostInvoiceLedgerEntryAsync(invoice, visit.CustomerId, fee - nonCreditPaid, cancellationToken);
+        await PostInvoiceLedgerEntryAsync(invoice, fee - nonCreditPaid, cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
 
@@ -257,24 +257,20 @@ public sealed class InvoicesService
         _db.Invoices.Add(voidInvoice);
         await _db.SaveChangesAsync(cancellationToken);
 
-        // Reverse exactly what the original posted to the ledger (its outstanding portion).
-        if (original.CustomerId is { } customerId)
+        // Reverse exactly what the original posted, to the same owner ledger (farm or customer);
+        // a walk-in original posted nothing, so there is nothing to reverse.
+        var ownerLedgerId = await ResolveOwnerLedgerIdAsync(original.CustomerId, original.FarmId, cancellationToken);
+        if (ownerLedgerId is { } reverseLedgerId)
         {
             var nonCreditPaid = await _db.Payments
                 .Where(p => p.InvoiceId == original.Id && p.Method != PaymentMethod.Credit)
                 .SumAsync(p => (decimal?)p.Amount, cancellationToken) ?? 0m;
             var reversal = -(original.Total - Money(nonCreditPaid));
 
-            var ledgerId = await _db.Ledgers
-                .Where(l => l.CustomerId == customerId)
-                .Select(l => (Guid?)l.Id)
-                .FirstOrDefaultAsync(cancellationToken)
-                ?? throw new NotFoundException("ledger", customerId);
-
             await _ledgers.AppendEntryAsync(
                 new LedgerEntryRequest(
                     Id: null,
-                    LedgerId: ledgerId,
+                    LedgerId: reverseLedgerId,
                     EntryType: LedgerEntryType.Adjustment,
                     Amount: reversal,
                     InvoiceId: voidInvoice.Id,
@@ -496,25 +492,48 @@ public sealed class InvoicesService
                 cancellationToken);
         }
 
-        // Ledger: customer invoices post the outstanding (credit) portion; walk-ins post nothing.
-        if (customerId is { } ledgerCustomer)
-        {
-            await PostInvoiceLedgerEntryAsync(invoice, ledgerCustomer, total - nonCreditPaid, cancellationToken);
-        }
+        // Ledger: an invoice posts its outstanding (credit) portion to its owner ledger — the farm
+        // ledger for a farm-scoped invoice, else the customer ledger; a walk-in (no owner) posts nothing.
+        await PostInvoiceLedgerEntryAsync(invoice, total - nonCreditPaid, cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
 
         return await BuildResponseAsync(invoice.Id, cancellationToken);
     }
 
-    private async Task PostInvoiceLedgerEntryAsync(
-        Invoice invoice, Guid customerId, decimal amount, CancellationToken cancellationToken)
+    /// <summary>
+    /// M16 — the ledger a charge posts to: the farm ledger when a <c>farm_id</c> is in play
+    /// (<c>Invoice.FarmId</c> / <c>Visit.FarmId</c> / <c>Batch.FarmId</c>), else the customer ledger,
+    /// else null (walk-in: no customer, skip the ledger). The owning ledger always exists — a farm
+    /// gets one in its PUT path and a customer gets one on creation.
+    /// </summary>
+    internal async Task<Guid?> ResolveOwnerLedgerIdAsync(
+        Guid? customerId, Guid? farmId, CancellationToken cancellationToken)
     {
-        var ledgerId = await _db.Ledgers
-            .Where(l => l.CustomerId == customerId)
-            .Select(l => (Guid?)l.Id)
-            .FirstOrDefaultAsync(cancellationToken)
-            ?? throw new NotFoundException("ledger", customerId);
+        if (farmId is { } fid)
+        {
+            return await _db.Ledgers.Where(l => l.FarmId == fid).Select(l => (Guid?)l.Id)
+                       .FirstOrDefaultAsync(cancellationToken)
+                   ?? throw new NotFoundException("ledger", fid);
+        }
+
+        if (customerId is { } cid)
+        {
+            return await _db.Ledgers.Where(l => l.CustomerId == cid).Select(l => (Guid?)l.Id)
+                       .FirstOrDefaultAsync(cancellationToken)
+                   ?? throw new NotFoundException("ledger", cid);
+        }
+
+        return null;
+    }
+
+    private async Task PostInvoiceLedgerEntryAsync(Invoice invoice, decimal amount, CancellationToken cancellationToken)
+    {
+        var ledgerId = await ResolveOwnerLedgerIdAsync(invoice.CustomerId, invoice.FarmId, cancellationToken);
+        if (ledgerId is not { } lid)
+        {
+            return; // walk-in: no owner ledger to post to
+        }
 
         var entryType = invoice.InvoiceType == InvoiceType.ExamFee
             ? LedgerEntryType.ExamFee
@@ -523,7 +542,7 @@ public sealed class InvoicesService
         await _ledgers.AppendEntryAsync(
             new LedgerEntryRequest(
                 Id: null,
-                LedgerId: ledgerId,
+                LedgerId: lid,
                 EntryType: entryType,
                 Amount: amount,
                 InvoiceId: invoice.Id,
