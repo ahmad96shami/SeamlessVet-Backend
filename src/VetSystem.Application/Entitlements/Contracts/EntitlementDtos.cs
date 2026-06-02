@@ -21,10 +21,13 @@ public sealed record DoctorEntitlementResponse(
 /// is a <see cref="VetSystem.Domain.Entities.PaymentMethod"/> value.</summary>
 public sealed record PayEntitlementRequest(string Method);
 
-/// <summary>Result of <c>POST /customers/{id}/close-account</c>: the now-closed ledger plus the
-/// entitlements the settlement workflow produced/refreshed for the customer (PRD §7.7).</summary>
+/// <summary>Result of <c>POST /customers/{id}/close-account</c> (M16: own ledger) and
+/// <c>POST /farms/{id}/close-account</c>: the now-closed ledger plus the entitlements the settlement
+/// workflow produced/refreshed for that owner (PRD §7.7). <see cref="FarmId"/> is set for a farm close
+/// (with <see cref="CustomerId"/> the owning customer), null for a customer close.</summary>
 public sealed record CloseAccountResponse(
     Guid CustomerId,
+    Guid? FarmId,
     Guid LedgerId,
     string Status,
     DateTimeOffset? ClosedAt,

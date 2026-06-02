@@ -1,3 +1,4 @@
+using VetSystem.API.Entitlements;
 using VetSystem.API.Farms;
 using VetSystem.API.Filters;
 using VetSystem.Application.Farms.Contracts;
@@ -47,6 +48,13 @@ public sealed class FarmsModule : IEndpointModule
         // M16 — the farm's ledger statement (mirrors the customer statement), ready for WhatsApp/print.
         group.MapGet("/{id:guid}/statement", Statement)
             .WithName("Farms_Statement");
+
+        // M16 — close the farm's account (zero-balance only) and compute its entitlements. Payout
+        // authority, so gated on entitlements.approve like the customer close.
+        group.MapPost("/{id:guid}/close-account", CloseAccount)
+            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .AddEndpointFilter(new IdempotencyKeyFilter("close_farm_account"))
+            .WithName("Farms_CloseAccount");
     }
 
     private static async Task<IResult> List(
@@ -101,5 +109,14 @@ public sealed class FarmsModule : IEndpointModule
     {
         var statement = await ledgers.GetFarmStatementAsync(id, from, to, cancellationToken);
         return TypedResults.Ok(statement);
+    }
+
+    private static async Task<IResult> CloseAccount(
+        Guid id,
+        EntitlementSettlementService settlement,
+        CancellationToken cancellationToken)
+    {
+        var result = await settlement.CloseFarmAccountAsync(id, cancellationToken);
+        return TypedResults.Ok(result);
     }
 }

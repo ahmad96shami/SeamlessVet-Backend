@@ -49,9 +49,11 @@ public sealed class EntitlementSettlementService
     }
 
     /// <summary>
-    /// M9 task 9 — close a customer account. Rejected unless the ledger balance is exactly zero;
-    /// only a full settlement closes it. Then computes entitlements for the customer's batches and
-    /// completed non-batch visits (idempotent), all in one transaction.
+    /// M9 task 9 / M16 — close a customer's <b>own</b> ledger (pet/clinic charges). Rejected unless the
+    /// own-ledger balance is exactly zero; only a full settlement closes it. Then computes entitlements
+    /// for the customer's <b>non-farm</b> batches and completed non-batch visits — the ones that route
+    /// to this ledger (farm-scoped batches/visits settle via <see cref="CloseFarmAccountAsync"/>). The
+    /// customer is only fully settled once its own ledger and every farm ledger are closed.
     /// </summary>
     public async Task<CloseAccountResponse> CloseCustomerAccountAsync(Guid customerId, CancellationToken cancellationToken)
     {
@@ -62,24 +64,10 @@ public sealed class EntitlementSettlementService
 
         await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
 
-        if (ledger.Status != LedgerStatus.Closed)
-        {
-            if (ledger.Balance != 0m)
-            {
-                throw new ConflictException(
-                    "account_not_settled",
-                    $"Cannot close the account: the ledger balance is {ledger.Balance:0.00}. Partial payments do not "
-                    + "release doctor entitlements — settle the balance to zero first.");
-            }
+        await EnsureClosedAsync(ledger, cancellationToken);
 
-            ledger.Status = LedgerStatus.Closed;
-            ledger.ClosedAt = _clock.UtcNow;
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-
-        // Settlement workflow (PRD §7.7): materialize entitlements for everything this customer owns.
         var batchIds = await _db.Batches
-            .Where(b => b.CustomerId == customerId)
+            .Where(b => b.CustomerId == customerId && b.FarmId == null)
             .Select(b => b.Id)
             .ToListAsync(cancellationToken);
         foreach (var batchId in batchIds)
@@ -88,7 +76,8 @@ public sealed class EntitlementSettlementService
         }
 
         var visitIds = await _db.Visits
-            .Where(v => v.CustomerId == customerId && v.BatchId == null && v.Status == VisitStatus.Completed)
+            .Where(v => v.CustomerId == customerId && v.FarmId == null && v.BatchId == null
+                        && v.Status == VisitStatus.Completed)
             .Select(v => v.Id)
             .ToListAsync(cancellationToken);
         foreach (var visitId in visitIds)
@@ -98,8 +87,75 @@ public sealed class EntitlementSettlementService
 
         await tx.CommitAsync(cancellationToken);
 
-        var entitlements = await ListForCustomerAsync(customerId, cancellationToken);
-        return new CloseAccountResponse(customerId, ledger.Id, ledger.Status, ledger.ClosedAt, entitlements);
+        var entitlements = await ListEntitlementsAsync(batchIds, visitIds, cancellationToken);
+        return new CloseAccountResponse(customerId, FarmId: null, ledger.Id, ledger.Status, ledger.ClosedAt, entitlements);
+    }
+
+    /// <summary>
+    /// M16 — close a <b>farm</b>'s ledger. Same zero-balance gate as a customer close; then computes
+    /// entitlements for that farm's batches and its completed non-batch visits. Closing farm A neither
+    /// touches farm B's ledger (so farm B's entitlements stay locked) nor closes the owning customer.
+    /// </summary>
+    public async Task<CloseAccountResponse> CloseFarmAccountAsync(Guid farmId, CancellationToken cancellationToken)
+    {
+        RequireUser();
+
+        var farm = await _db.Farms
+            .Where(f => f.Id == farmId)
+            .Select(f => new { f.Id, f.CustomerId })
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        var ledger = await _db.Ledgers.FirstOrDefaultAsync(l => l.FarmId == farmId, cancellationToken)
+                     ?? throw new NotFoundException("ledger", farmId);
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+        await EnsureClosedAsync(ledger, cancellationToken);
+
+        var batchIds = await _db.Batches
+            .Where(b => b.FarmId == farmId)
+            .Select(b => b.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var batchId in batchIds)
+        {
+            await _entitlements.ComputeForBatchAsync(batchId, cancellationToken);
+        }
+
+        var visitIds = await _db.Visits
+            .Where(v => v.FarmId == farmId && v.BatchId == null && v.Status == VisitStatus.Completed)
+            .Select(v => v.Id)
+            .ToListAsync(cancellationToken);
+        foreach (var visitId in visitIds)
+        {
+            await _entitlements.ComputeForVisitAsync(visitId, cancellationToken);
+        }
+
+        await tx.CommitAsync(cancellationToken);
+
+        var entitlements = await ListEntitlementsAsync(batchIds, visitIds, cancellationToken);
+        return new CloseAccountResponse(farm.CustomerId, farm.Id, ledger.Id, ledger.Status, ledger.ClosedAt, entitlements);
+    }
+
+    /// <summary>Closes a ledger once its balance is exactly zero (partial payments never release).</summary>
+    private async Task EnsureClosedAsync(Ledger ledger, CancellationToken cancellationToken)
+    {
+        if (ledger.Status == LedgerStatus.Closed)
+        {
+            return;
+        }
+
+        if (ledger.Balance != 0m)
+        {
+            throw new ConflictException(
+                "account_not_settled",
+                $"Cannot close the account: the ledger balance is {ledger.Balance:0.00}. Partial payments do not "
+                + "release doctor entitlements — settle the balance to zero first.");
+        }
+
+        ledger.Status = LedgerStatus.Closed;
+        ledger.ClosedAt = _clock.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
     }
 
     /// <summary>M9 task 10 — approve a pending entitlement; blocked unless the related ledger is closed.</summary>
@@ -200,28 +256,33 @@ public sealed class EntitlementSettlementService
         return _mapper.Map<DoctorEntitlementResponse>(entitlement);
     }
 
-    /// <summary>The ledger status of the customer behind an entitlement's source (batch or visit).</summary>
+    /// <summary>
+    /// M16 — the status of the ledger that gates an entitlement's release: the farm ledger when the
+    /// source (batch or visit) carries a <c>farm_id</c>, else the owning customer's ledger.
+    /// </summary>
     private async Task<string> ResolveLedgerStatusAsync(DoctorEntitlement entitlement, CancellationToken cancellationToken)
     {
-        var customerId = entitlement.BatchId is { } batchId
-            ? await _db.Batches.Where(b => b.Id == batchId).Select(b => (Guid?)b.CustomerId).FirstOrDefaultAsync(cancellationToken)
-            : await _db.Visits.Where(v => v.Id == entitlement.VisitId!.Value).Select(v => (Guid?)v.CustomerId).FirstOrDefaultAsync(cancellationToken);
+        var owner = entitlement.BatchId is { } batchId
+            ? await _db.Batches.Where(b => b.Id == batchId)
+                .Select(b => new LedgerOwner(b.FarmId, b.CustomerId)).FirstOrDefaultAsync(cancellationToken)
+            : await _db.Visits.Where(v => v.Id == entitlement.VisitId!.Value)
+                .Select(v => new LedgerOwner(v.FarmId, v.CustomerId)).FirstOrDefaultAsync(cancellationToken);
 
-        if (customerId is not { } cid)
+        if (owner is null)
         {
             throw new NotFoundException("entitlement_source", entitlement.Id);
         }
 
-        return await _db.Ledgers.Where(l => l.CustomerId == cid).Select(l => l.Status).FirstOrDefaultAsync(cancellationToken)
-               ?? throw new NotFoundException("ledger", cid);
+        var status = owner.FarmId is { } farmId
+            ? await _db.Ledgers.Where(l => l.FarmId == farmId).Select(l => l.Status).FirstOrDefaultAsync(cancellationToken)
+            : await _db.Ledgers.Where(l => l.CustomerId == owner.CustomerId).Select(l => l.Status).FirstOrDefaultAsync(cancellationToken);
+
+        return status ?? throw new NotFoundException("ledger", owner.FarmId ?? owner.CustomerId ?? entitlement.Id);
     }
 
-    private async Task<IReadOnlyList<DoctorEntitlementResponse>> ListForCustomerAsync(
-        Guid customerId, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<DoctorEntitlementResponse>> ListEntitlementsAsync(
+        IReadOnlyList<Guid> batchIds, IReadOnlyList<Guid> visitIds, CancellationToken cancellationToken)
     {
-        var batchIds = await _db.Batches.Where(b => b.CustomerId == customerId).Select(b => b.Id).ToListAsync(cancellationToken);
-        var visitIds = await _db.Visits.Where(v => v.CustomerId == customerId).Select(v => v.Id).ToListAsync(cancellationToken);
-
         var rows = await _db.DoctorEntitlements.AsNoTracking()
             .Where(e => (e.BatchId != null && batchIds.Contains(e.BatchId.Value))
                         || (e.VisitId != null && visitIds.Contains(e.VisitId.Value)))
@@ -230,6 +291,8 @@ public sealed class EntitlementSettlementService
 
         return rows.Select(_mapper.Map<DoctorEntitlementResponse>).ToList();
     }
+
+    private sealed record LedgerOwner(Guid? FarmId, Guid? CustomerId);
 
     private (Guid EnvironmentId, Guid UserId) RequireUser()
     {
