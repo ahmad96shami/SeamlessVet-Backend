@@ -14,7 +14,7 @@ namespace VetSystem.Tests.Infrastructure;
 public sealed class PgTestScope : IAsyncDisposable
 {
     public const string ConnectionString =
-        "Host=localhost;Port=5432;Database=vet;Username=vet;Password=vet_dev_password";
+        "Host=localhost;Port=5433;Database=vet;Username=vet;Password=vet_dev_password";
 
     public Guid EnvironmentId { get; }
 

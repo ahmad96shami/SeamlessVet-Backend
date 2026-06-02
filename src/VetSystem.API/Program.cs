@@ -140,6 +140,8 @@ builder.Services.AddScoped<VetSystem.API.Inventory.InventoryReadService>();
 // M5 — visits & medical records
 builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberValidator,
     VetSystem.Infrastructure.Visits.VisitNumberValidator>();
+builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberGenerator,
+    VetSystem.Infrastructure.Visits.VisitNumberGenerator>();
 builder.Services.AddScoped<VetSystem.API.Visits.VisitsService>();
 builder.Services.AddScoped<VetSystem.API.Procedures.ProceduresService>();
 builder.Services.AddScoped<VetSystem.API.Prescriptions.PrescriptionsService>();
@@ -369,12 +371,13 @@ builder.Services.AddRouting(options => options.LowercaseUrls = true);
 // dev/preview ports. Bearer tokens travel in the Authorization header (no cookies) so credentials are
 // not enabled; AllowAnyHeader covers Authorization + Idempotency-Key.
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
-    ?? ["http://localhost:5173", "http://localhost:4173"];
+    ?? ["http://localhost:5173", "http://localhost:4173", "https://strained-discount-washer.ngrok-free.dev"];
 builder.Services.AddCors(options =>
     options.AddPolicy("web", policy => policy
         .WithOrigins(corsOrigins)
         .AllowAnyHeader()
-        .AllowAnyMethod()));
+        .AllowAnyMethod()
+        .AllowCredentials()));
 
 // M13 task 10 — rate limit /sync/* with a per-user token bucket to absorb field-doctor reconnect/sync
 // storms (PRD §14 risk mitigation). The limiter is always wired; the "sync" policy decides per request

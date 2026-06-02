@@ -25,19 +25,22 @@ public sealed class VisitsService
     private readonly IMapper _mapper;
     private readonly IClock _clock;
     private readonly IVisitNumberValidator _visitNumbers;
+    private readonly IVisitNumberGenerator _visitNumberGen;
 
     public VisitsService(
         ApplicationDbContext db,
         ICurrentUserAccessor currentUser,
         IMapper mapper,
         IClock clock,
-        IVisitNumberValidator visitNumbers)
+        IVisitNumberValidator visitNumbers,
+        IVisitNumberGenerator visitNumberGen)
     {
         _db = db;
         _currentUser = currentUser;
         _mapper = mapper;
         _clock = clock;
         _visitNumbers = visitNumbers;
+        _visitNumberGen = visitNumberGen;
     }
 
     public async Task<IReadOnlyList<VisitResponse>> ListAsync(
@@ -103,6 +106,11 @@ public sealed class VisitsService
         if (visitNumber is not null)
         {
             await _visitNumbers.ValidateAsync(visitNumber, excludeVisitId: null, cancellationToken);
+        }
+        else
+        {
+            // Web clients send null — auto-assign {prefix}-{n} when the creator has a NumberPrefix.
+            visitNumber = await _visitNumberGen.NextForCurrentUserAsync(cancellationToken);
         }
 
         if (request.Id is { } id && id != Guid.Empty)

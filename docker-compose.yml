@@ -21,7 +21,10 @@ services:
       POSTGRES_USER: vet
       POSTGRES_PASSWORD: ${PG_PASSWORD:-vet_dev_password}
     ports:
-      - "5432:5432"
+      # Host port moved off 5432 to avoid colliding with another project's Postgres
+      # on this machine. Override via PG_HOST_PORT. The container port stays 5432
+      # (internal services like PowerSync reach it as postgres:5432 over the network).
+      - "${PG_HOST_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./db-init:/docker-entrypoint-initdb.d:ro
