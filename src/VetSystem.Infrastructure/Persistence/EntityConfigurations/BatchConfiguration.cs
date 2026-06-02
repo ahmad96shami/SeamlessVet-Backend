@@ -13,6 +13,7 @@ internal sealed class BatchConfiguration : IEntityTypeConfiguration<Batch>
         builder.HasKey(b => b.Id);
         builder.Property(b => b.ContractId).HasColumnName("contract_id");
         builder.Property(b => b.CustomerId).HasColumnName("customer_id").IsRequired();
+        builder.Property(b => b.FarmId).HasColumnName("farm_id");
         builder.Property(b => b.ResponsibleDoctorId).HasColumnName("responsible_doctor_id").IsRequired();
         builder.Property(b => b.AnimalCount).HasColumnName("animal_count").IsRequired();
         builder.Property(b => b.StartDate).HasColumnName("start_date").IsRequired();
@@ -38,6 +39,8 @@ internal sealed class BatchConfiguration : IEntityTypeConfiguration<Batch>
             .HasDatabaseName("ix_batches_doctor");
         builder.HasIndex(b => new { b.EnvironmentId, b.CustomerId })
             .HasDatabaseName("ix_batches_customer");
+        builder.HasIndex(b => new { b.EnvironmentId, b.FarmId })
+            .HasDatabaseName("ix_batches_farm");
 
         builder.HasOne<Contract>()
             .WithMany()
@@ -47,6 +50,12 @@ internal sealed class BatchConfiguration : IEntityTypeConfiguration<Batch>
         builder.HasOne<Customer>()
             .WithMany()
             .HasForeignKey(b => b.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M15 — the cycle's farm (denormalized customer_id mirrors farm.customer_id).
+        builder.HasOne<Farm>()
+            .WithMany()
+            .HasForeignKey(b => b.FarmId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne<User>()

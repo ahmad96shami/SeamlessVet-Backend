@@ -23,7 +23,7 @@ internal sealed class CustomerConfiguration : IEntityTypeConfiguration<Customer>
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_customers_type",
-            "type IN ('regular_farm','home','cattle_farm','poultry_farm')"));
+            "type IN ('regular_farm','home','cattle_farm','poultry_farm','clinic_customer')"));
 
         builder.HasIndex(c => new { c.EnvironmentId, c.PhonePrimary })
             .HasDatabaseName("ux_customers_env_phone")

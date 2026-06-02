@@ -14,6 +14,7 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
         builder.Property(v => v.VisitType).HasColumnName("visit_type").IsRequired().HasMaxLength(16);
         builder.Property(v => v.VisitNumber).HasColumnName("visit_number").HasMaxLength(64);
         builder.Property(v => v.CustomerId).HasColumnName("customer_id").IsRequired();
+        builder.Property(v => v.FarmId).HasColumnName("farm_id");
         builder.Property(v => v.PetId).HasColumnName("pet_id");
         builder.Property(v => v.BatchId).HasColumnName("batch_id");
         builder.Property(v => v.ContractId).HasColumnName("contract_id");
@@ -62,10 +63,18 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
             .HasDatabaseName("ix_visits_batch");
         builder.HasIndex(v => new { v.EnvironmentId, v.ContractId })
             .HasDatabaseName("ix_visits_contract");
+        builder.HasIndex(v => new { v.EnvironmentId, v.FarmId })
+            .HasDatabaseName("ix_visits_farm");
 
         builder.HasOne<Customer>()
             .WithMany()
             .HasForeignKey(v => v.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M15 — the farm this visit attributes to (null for pet/clinic visits).
+        builder.HasOne<Farm>()
+            .WithMany()
+            .HasForeignKey(v => v.FarmId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne<Pet>()

@@ -13,6 +13,7 @@ internal sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
         builder.HasKey(i => i.Id);
         builder.Property(i => i.InvoiceType).HasColumnName("invoice_type").IsRequired().HasMaxLength(16);
         builder.Property(i => i.CustomerId).HasColumnName("customer_id");
+        builder.Property(i => i.FarmId).HasColumnName("farm_id");
         builder.Property(i => i.VisitId).HasColumnName("visit_id");
         builder.Property(i => i.BatchId).HasColumnName("batch_id");
         builder.Property(i => i.Number).HasColumnName("number").HasMaxLength(64);
@@ -45,10 +46,18 @@ internal sealed class InvoiceConfiguration : IEntityTypeConfiguration<Invoice>
             .IsDescending(false, false, true);
         builder.HasIndex(i => new { i.EnvironmentId, i.BatchId })
             .HasDatabaseName("ix_invoices_batch");
+        builder.HasIndex(i => new { i.EnvironmentId, i.FarmId })
+            .HasDatabaseName("ix_invoices_farm");
 
         builder.HasOne<Customer>()
             .WithMany()
             .HasForeignKey(i => i.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M15 — the farm this invoice attributes to (derived from visit/batch).
+        builder.HasOne<Farm>()
+            .WithMany()
+            .HasForeignKey(i => i.FarmId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne<Visit>()

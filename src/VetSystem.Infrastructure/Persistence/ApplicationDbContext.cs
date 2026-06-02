@@ -37,6 +37,7 @@ public sealed class ApplicationDbContext : DbContext
 
     public DbSet<Customer> Customers => Set<Customer>();
     public DbSet<Pet> Pets => Set<Pet>();
+    public DbSet<Farm> Farms => Set<Farm>();
     public DbSet<Ledger> Ledgers => Set<Ledger>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
 
@@ -61,6 +62,7 @@ public sealed class ApplicationDbContext : DbContext
 
     public DbSet<Contract> Contracts => Set<Contract>();
     public DbSet<ContractMedicationPrice> ContractMedicationPrices => Set<ContractMedicationPrice>();
+    public DbSet<ContractFarm> ContractFarms => Set<ContractFarm>();
     public DbSet<Batch> Batches => Set<Batch>();
 
     public DbSet<DoctorEntitlement> DoctorEntitlements => Set<DoctorEntitlement>();
