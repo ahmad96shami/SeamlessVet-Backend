@@ -32,6 +32,15 @@ public sealed class Appointment : Entity
 
     /// <summary>The clinic visit opened when this appointment was attended (M6); null until then.</summary>
     public Guid? VisitId { get; set; }
+
+    /// <summary>
+    /// True when this appointment was scheduled as a follow-up from a visit (M17 / PRD §18.8).
+    /// Attending it opens a visit whose checkup fee is waived once per <see cref="OriginVisitId"/>.
+    /// </summary>
+    public bool IsFollowUp { get; set; }
+
+    /// <summary>The visit this follow-up was scheduled from (M17); null for a normal appointment.</summary>
+    public Guid? OriginVisitId { get; set; }
 }
 
 /// <summary>

@@ -58,6 +58,20 @@ public sealed class Visit : Entity
 
     /// <summary>Field-visit exam fee (Kashfiyya) snapshot (PRD §6.2; System B input for M9).</summary>
     public decimal? ExamFeeApplied { get; set; }
+
+    /// <summary>
+    /// In-clinic checkup fee (رسوم الكشف, M17 / PRD §18.7) — auto-applied from
+    /// <c>system_settings.default_checkup_fee</c> at create, editable per visit. Posts a
+    /// <c>checkup_fee</c> ledger entry when the visit completes; <c>0</c> on a waived free follow-up.
+    /// Null/absent on field visits.
+    /// </summary>
+    public decimal? CheckupFeeApplied { get; set; }
+
+    /// <summary>
+    /// The originating visit when this is a follow-up visit (M17 / PRD §18.8). Each origin grants
+    /// exactly one free follow-up — the first follow-up visit it spawns has its checkup fee waived.
+    /// </summary>
+    public Guid? FollowUpOfVisitId { get; set; }
 }
 
 public static class VisitType

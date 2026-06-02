@@ -37,8 +37,14 @@ public static class LedgerEntryType
     public const string ReceiptVoucher = "receipt_voucher";
     public const string Adjustment = "adjustment";
 
+    /// <summary>In-clinic checkup fee (رسوم الكشف, M17 / PRD §18.7).</summary>
+    public const string CheckupFee = "checkup_fee";
+
+    /// <summary>Hospitalized boarding charge (مبيت, M17 / PRD §18.6) — nights × per-night rate.</summary>
+    public const string NightStay = "night_stay";
+
     public static readonly IReadOnlyCollection<string> All =
     [
-        Invoice, ServiceFee, ExamFee, ReceiptVoucher, Adjustment,
+        Invoice, ServiceFee, ExamFee, ReceiptVoucher, Adjustment, CheckupFee, NightStay,
     ];
 }
