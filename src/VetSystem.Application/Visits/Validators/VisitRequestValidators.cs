@@ -35,6 +35,7 @@ public sealed class VisitCreateRequestValidator : AbstractValidator<VisitCreateR
         RuleFor(r => r.RespiratoryRate!.Value).GreaterThanOrEqualTo(0).When(r => r.RespiratoryRate.HasValue);
         RuleFor(r => r.Weight!.Value).GreaterThanOrEqualTo(0).When(r => r.Weight.HasValue);
         RuleFor(r => r.ExamFeeApplied!.Value).GreaterThanOrEqualTo(0).When(r => r.ExamFeeApplied.HasValue);
+        RuleFor(r => r.CheckupFeeApplied!.Value).GreaterThanOrEqualTo(0).When(r => r.CheckupFeeApplied.HasValue);
     }
 }
 
@@ -57,5 +58,6 @@ public sealed class VisitPatchRequestValidator : AbstractValidator<VisitPatchReq
         RuleFor(r => r.RespiratoryRate!.Value).GreaterThanOrEqualTo(0).When(r => r.RespiratoryRate.HasValue);
         RuleFor(r => r.Weight!.Value).GreaterThanOrEqualTo(0).When(r => r.Weight.HasValue);
         RuleFor(r => r.ExamFeeApplied!.Value).GreaterThanOrEqualTo(0).When(r => r.ExamFeeApplied.HasValue);
+        RuleFor(r => r.CheckupFeeApplied!.Value).GreaterThanOrEqualTo(0).When(r => r.CheckupFeeApplied.HasValue);
     }
 }

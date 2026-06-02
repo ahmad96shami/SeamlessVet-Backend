@@ -31,7 +31,11 @@ public sealed record VisitCreateRequest(
     string? Severity,
     string? IcdVetCode,
     // field-visit exam fee snapshot
-    decimal? ExamFeeApplied);
+    decimal? ExamFeeApplied,
+    // M17 — in-clinic checkup fee (defaulted from settings when null on an in-clinic visit) +
+    // the originating visit when this is a follow-up (its fee is waived once per origin).
+    decimal? CheckupFeeApplied,
+    Guid? FollowUpOfVisitId);
 
 /// <summary>
 /// Section-level update (PRD §5.2 task 5). Every field is optional — only the supplied ones change.
@@ -53,7 +57,8 @@ public sealed record VisitPatchRequest(
     string? FinalDiagnosis,
     string? Severity,
     string? IcdVetCode,
-    decimal? ExamFeeApplied);
+    decimal? ExamFeeApplied,
+    decimal? CheckupFeeApplied);
 
 public sealed record VisitResponse(
     Guid Id,
@@ -81,5 +86,7 @@ public sealed record VisitResponse(
     string? Severity,
     string? IcdVetCode,
     decimal? ExamFeeApplied,
+    decimal? CheckupFeeApplied,
+    Guid? FollowUpOfVisitId,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);

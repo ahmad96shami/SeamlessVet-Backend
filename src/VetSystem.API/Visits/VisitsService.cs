@@ -1,6 +1,8 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
+using VetSystem.Application.Ledgers;
+using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Application.Visits;
 using VetSystem.Application.Visits.Contracts;
 using VetSystem.Domain.Common;
@@ -26,6 +28,8 @@ public sealed class VisitsService
     private readonly IClock _clock;
     private readonly IVisitNumberValidator _visitNumbers;
     private readonly IVisitNumberGenerator _visitNumberGen;
+    private readonly ILedgerService _ledgers;
+    private readonly IOwnerLedgerResolver _ownerLedger;
 
     public VisitsService(
         ApplicationDbContext db,
@@ -33,7 +37,9 @@ public sealed class VisitsService
         IMapper mapper,
         IClock clock,
         IVisitNumberValidator visitNumbers,
-        IVisitNumberGenerator visitNumberGen)
+        IVisitNumberGenerator visitNumberGen,
+        ILedgerService ledgers,
+        IOwnerLedgerResolver ownerLedger)
     {
         _db = db;
         _currentUser = currentUser;
@@ -41,6 +47,8 @@ public sealed class VisitsService
         _clock = clock;
         _visitNumbers = visitNumbers;
         _visitNumberGen = visitNumberGen;
+        _ledgers = ledgers;
+        _ownerLedger = ownerLedger;
     }
 
     public async Task<IReadOnlyList<VisitResponse>> ListAsync(
@@ -128,6 +136,14 @@ public sealed class VisitsService
             }
         }
 
+        if (request.FollowUpOfVisitId is { } originVisitId)
+        {
+            await RequireExistsAsync(_db.Visits.AnyAsync(v => v.Id == originVisitId, cancellationToken),
+                "visit", originVisitId);
+        }
+
+        var checkupFee = await ResolveCheckupFeeAsync(request.VisitType, request.CheckupFeeApplied, cancellationToken);
+
         var visit = new Visit
         {
             Id = request.Id ?? Guid.Empty,
@@ -152,6 +168,8 @@ public sealed class VisitsService
             Severity = request.Severity,
             IcdVetCode = request.IcdVetCode,
             ExamFeeApplied = request.ExamFeeApplied,
+            CheckupFeeApplied = checkupFee,
+            FollowUpOfVisitId = request.FollowUpOfVisitId,
         };
 
         _db.Visits.Add(visit);
@@ -208,6 +226,7 @@ public sealed class VisitsService
         if (request.Severity is not null) visit.Severity = request.Severity;
         if (request.IcdVetCode is not null) visit.IcdVetCode = request.IcdVetCode;
         if (request.ExamFeeApplied.HasValue) visit.ExamFeeApplied = request.ExamFeeApplied;
+        if (request.CheckupFeeApplied.HasValue) visit.CheckupFeeApplied = request.CheckupFeeApplied;
 
         await _db.SaveChangesAsync(cancellationToken);
         return _mapper.Map<VisitResponse>(visit);
@@ -239,8 +258,61 @@ public sealed class VisitsService
         visit.Status = target;
         visit.EndedAt = _clock.UtcNow;
 
+        // M17 — completing an in-clinic visit posts its checkup fee (رسوم الكشف) to the owner ledger
+        // (M16 routing). A waived follow-up (fee 0) or a cancellation posts nothing.
+        var postCheckup = target == VisitStatus.Completed
+                          && visit.VisitType == VisitType.InClinic
+                          && visit.CheckupFeeApplied is > 0m;
+
+        if (!postCheckup)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            return _mapper.Map<VisitResponse>(visit);
+        }
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
+        await PostCheckupFeeAsync(visit, cancellationToken);
+        await tx.CommitAsync(cancellationToken);
         return _mapper.Map<VisitResponse>(visit);
+    }
+
+    /// <summary>
+    /// In-clinic checkup fee for a new visit (M17): the supplied value (editable, incl. 0 to waive)
+    /// when present, else the <c>system_settings.default_checkup_fee</c> default; field visits get none.
+    /// </summary>
+    private async Task<decimal?> ResolveCheckupFeeAsync(
+        string visitType, decimal? explicitFee, CancellationToken cancellationToken)
+    {
+        if (explicitFee is not null || visitType != VisitType.InClinic)
+        {
+            return explicitFee;
+        }
+
+        return await _db.SystemSettings.AsNoTracking()
+            .Select(s => (decimal?)s.DefaultCheckupFee)
+            .FirstOrDefaultAsync(cancellationToken) ?? 0m;
+    }
+
+    private async Task PostCheckupFeeAsync(Visit visit, CancellationToken cancellationToken)
+    {
+        var ledgerId = await _ownerLedger.ResolveAsync(visit.CustomerId, visit.FarmId, cancellationToken);
+        if (ledgerId is not { } lid)
+        {
+            return; // defensive: an in-clinic visit always has a customer, so this never trips
+        }
+
+        await _ledgers.AppendEntryAsync(
+            new LedgerEntryRequest(
+                Id: null,
+                LedgerId: lid,
+                EntryType: LedgerEntryType.CheckupFee,
+                Amount: Math.Round(visit.CheckupFeeApplied!.Value, 2, MidpointRounding.AwayFromZero),
+                InvoiceId: null,
+                ReceiptVoucherId: null,
+                Description: visit.VisitNumber is null ? "Checkup fee" : $"Checkup fee — visit {visit.VisitNumber}",
+                IdempotencyKey: $"checkup-{visit.Id}"),
+            cancellationToken);
     }
 
     private void RequireEnvironment()
