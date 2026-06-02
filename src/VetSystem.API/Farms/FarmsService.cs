@@ -99,6 +99,17 @@ public sealed class FarmsService
         };
 
         _db.Farms.Add(entity);
+
+        // M16: a farm owns its ledger, created in the same transaction (mirrors the customer-ledger
+        // seed in CustomersService.CreateAsync). AuditingInterceptor stamps id + environment_id +
+        // timestamps, so we leave those at default.
+        _db.Ledgers.Add(new Ledger
+        {
+            FarmId = entity.Id,
+            Balance = 0m,
+            Status = LedgerStatus.Open,
+        });
+
         await _db.SaveChangesAsync(cancellationToken);
 
         return _mapper.Map<FarmResponse>(entity);

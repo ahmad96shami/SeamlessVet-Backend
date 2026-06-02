@@ -57,6 +57,16 @@ public sealed class FarmsSyncHandler : ISyncTableHandler
         };
 
         _db.Farms.Add(farm);
+
+        // M16: a farm owns its ledger, created in the same transaction (mirrors the customer-ledger
+        // seed). AuditingInterceptor stamps id + environment_id + timestamps.
+        _db.Ledgers.Add(new Ledger
+        {
+            FarmId = farm.Id,
+            Balance = 0m,
+            Status = LedgerStatus.Open,
+        });
+
         await _db.SaveChangesAsync(cancellationToken);
 
         return new SyncWriteResult(farm.Id, farm.UpdatedAt);
