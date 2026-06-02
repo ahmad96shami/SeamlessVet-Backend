@@ -44,5 +44,19 @@ public sealed record AppointmentResponse(
     string Status,
     string? Notes,
     Guid? VisitId,
+    bool IsFollowUp,
+    Guid? OriginVisitId,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
+
+/// <summary>
+/// Schedules a follow-up appointment from a visit (M17 / PRD §18.8). The customer + pet are taken
+/// from the origin visit; the doctor defaults to the origin's doctor. Attending the resulting
+/// appointment opens a visit whose checkup fee is waived — exactly once per origin visit.
+/// </summary>
+public sealed record ScheduleFollowUpRequest(
+    Guid? Id,
+    DateTimeOffset ScheduledAt,
+    Guid? DoctorId,
+    int? DurationMin,
+    string? Notes);

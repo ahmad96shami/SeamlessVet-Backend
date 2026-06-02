@@ -28,6 +28,19 @@ public sealed class AppointmentCreateRequestValidator : AbstractValidator<Appoin
     }
 }
 
+public sealed class ScheduleFollowUpRequestValidator : AbstractValidator<ScheduleFollowUpRequest>
+{
+    public ScheduleFollowUpRequestValidator()
+    {
+        RuleFor(r => r.ScheduledAt).NotEmpty();
+
+        RuleFor(r => r.DurationMin!.Value)
+            .InclusiveBetween(1, AppointmentSchedule.MaxDurationMin)
+            .When(r => r.DurationMin.HasValue)
+            .WithMessage($"DurationMin must be between 1 and {AppointmentSchedule.MaxDurationMin} minutes.");
+    }
+}
+
 public sealed class AppointmentPatchRequestValidator : AbstractValidator<AppointmentPatchRequest>
 {
     public AppointmentPatchRequestValidator()

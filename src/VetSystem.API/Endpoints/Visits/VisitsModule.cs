@@ -1,5 +1,7 @@
+using VetSystem.API.Appointments;
 using VetSystem.API.Filters;
 using VetSystem.API.Visits;
+using VetSystem.Application.Appointments.Contracts;
 using VetSystem.Application.Visits.Contracts;
 using VetSystem.Domain.Entities;
 
@@ -45,6 +47,14 @@ public sealed class VisitsModule : IEndpointModule
             .RequirePermission(PermissionKey.MedicalWrite)
             .AddEndpointFilter(new IdempotencyKeyFilter("visit_cancel"))
             .WithName("Visits_Cancel");
+
+        // M17 — schedule a follow-up appointment from this visit (PRD §18.8). Creates an appointment,
+        // so it's gated on AppointmentsWrite and delegates to the appointments service.
+        group.MapPost("/{id:guid}/schedule-follow-up", ScheduleFollowUp)
+            .RequirePermission(PermissionKey.AppointmentsWrite)
+            .AddEndpointFilter<ValidationFilter<ScheduleFollowUpRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("visit_follow_up"))
+            .WithName("Visits_ScheduleFollowUp");
     }
 
     private static async Task<IResult> List(
@@ -95,6 +105,16 @@ public sealed class VisitsModule : IEndpointModule
     private static async Task<IResult> Cancel(Guid id, VisitsService svc, CancellationToken cancellationToken)
     {
         var item = await svc.CancelAsync(id, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(item.Id));
+    }
+
+    private static async Task<IResult> ScheduleFollowUp(
+        Guid id,
+        ScheduleFollowUpRequest request,
+        AppointmentsService appointments,
+        CancellationToken cancellationToken)
+    {
+        var item = await appointments.ScheduleFollowUpAsync(id, request, cancellationToken);
         return TypedResults.Ok(new IdentifierResponse(item.Id));
     }
 }

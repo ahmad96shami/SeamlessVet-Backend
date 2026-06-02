@@ -203,6 +203,10 @@ public sealed class AppointmentsService
                 "An appointment needs a customer and a doctor before it can be attended (a visit is opened for them).");
         }
 
+        // M17 — the opened visit is in-clinic, so it carries the checkup fee (رسوم الكشف). A follow-up
+        // waives it exactly once per origin (PRD §18.8); otherwise it defaults from settings.
+        var checkupFee = await ResolveAttendCheckupFeeAsync(appointment, cancellationToken);
+
         var visit = new Visit
         {
             Id = Guid.CreateVersion7(),
@@ -212,6 +216,8 @@ public sealed class AppointmentsService
             DoctorId = doctorId,
             Status = VisitStatus.Open,
             StartedAt = _clock.UtcNow,
+            CheckupFeeApplied = checkupFee,
+            FollowUpOfVisitId = appointment.IsFollowUp ? appointment.OriginVisitId : null,
         };
         _db.Visits.Add(visit);
 
@@ -220,6 +226,73 @@ public sealed class AppointmentsService
 
         await _db.SaveChangesAsync(cancellationToken);
         return _mapper.Map<AppointmentResponse>(appointment);
+    }
+
+    /// <summary>
+    /// M17 task 8 — schedules a follow-up appointment from a visit (PRD §18.8). Customer + pet come
+    /// from the origin visit; the doctor defaults to the origin's doctor. Runs the same conflict
+    /// detection as a normal booking. Attending the result waives the checkup fee once per origin.
+    /// </summary>
+    public async Task<AppointmentResponse> ScheduleFollowUpAsync(
+        Guid visitId, ScheduleFollowUpRequest request, CancellationToken cancellationToken)
+    {
+        RequireEnvironment();
+
+        var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
+                    ?? throw new NotFoundException("visit", visitId);
+
+        var doctorId = request.DoctorId ?? visit.DoctorId;
+        await RequireExistsAsync(_db.Users.AnyAsync(u => u.Id == doctorId, cancellationToken), "doctor", doctorId);
+
+        if (request.Id is { } id && id != Guid.Empty)
+        {
+            var collision = await _db.Appointments.IgnoreQueryFilters().AnyAsync(a => a.Id == id, cancellationToken);
+            if (collision)
+            {
+                throw new ConflictException("appointment_id_collision", $"An appointment with id '{id}' already exists.");
+            }
+        }
+
+        await EnsureNoConflictAsync(doctorId, request.ScheduledAt, request.DurationMin, excludeAppointmentId: null, cancellationToken);
+
+        var appointment = new Appointment
+        {
+            Id = request.Id ?? Guid.Empty,
+            CustomerId = visit.CustomerId,
+            PetId = visit.PetId,
+            DoctorId = doctorId,
+            ServiceId = null,
+            ScheduledAt = request.ScheduledAt,
+            DurationMin = request.DurationMin,
+            Status = AppointmentStatus.Scheduled,
+            Notes = request.Notes,
+            IsFollowUp = true,
+            OriginVisitId = visitId,
+        };
+
+        _db.Appointments.Add(appointment);
+        await _db.SaveChangesAsync(cancellationToken);
+        return _mapper.Map<AppointmentResponse>(appointment);
+    }
+
+    /// <summary>
+    /// The checkup fee for the visit an attended appointment opens: the settings default, unless this
+    /// is the first non-cancelled follow-up for its origin visit, in which case it is waived (0).
+    /// </summary>
+    private async Task<decimal> ResolveAttendCheckupFeeAsync(Appointment appointment, CancellationToken cancellationToken)
+    {
+        var defaultFee = await _db.SystemSettings.AsNoTracking()
+            .Select(s => (decimal?)s.DefaultCheckupFee)
+            .FirstOrDefaultAsync(cancellationToken) ?? 0m;
+
+        if (appointment.IsFollowUp && appointment.OriginVisitId is { } origin)
+        {
+            var freeAlreadyUsed = await _db.Visits
+                .AnyAsync(v => v.FollowUpOfVisitId == origin && v.Status != VisitStatus.Cancelled, cancellationToken);
+            return freeAlreadyUsed ? defaultFee : 0m;
+        }
+
+        return defaultFee;
     }
 
     public Task<AppointmentResponse> CancelAsync(Guid id, CancellationToken cancellationToken)
