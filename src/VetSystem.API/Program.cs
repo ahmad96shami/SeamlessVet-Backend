@@ -122,6 +122,9 @@ builder.Services.AddScoped<VetSystem.API.Customers.CustomersService>();
 builder.Services.AddScoped<VetSystem.API.Pets.PetsService>();
 builder.Services.AddScoped<VetSystem.Application.Ledgers.ILedgerService,
     VetSystem.Infrastructure.Ledgers.LedgerService>();
+// M16/M17 — shared per-farm charge routing (invoices, night-stay + checkup-fee charges).
+builder.Services.AddScoped<VetSystem.Application.Ledgers.IOwnerLedgerResolver,
+    VetSystem.Infrastructure.Ledgers.OwnerLedgerResolver>();
 
 // M15 — farms (attached to customers like pets; inherit the customer's doctor scope).
 builder.Services.AddScoped<VetSystem.API.Farms.FarmsService>();
@@ -149,6 +152,7 @@ builder.Services.AddScoped<VetSystem.API.Visits.VisitsService>();
 builder.Services.AddScoped<VetSystem.API.Procedures.ProceduresService>();
 builder.Services.AddScoped<VetSystem.API.Prescriptions.PrescriptionsService>();
 builder.Services.AddScoped<VetSystem.API.DailyFollowUps.DailyFollowUpsService>();
+builder.Services.AddScoped<VetSystem.API.NightStays.NightStaysService>(); // M17 — night stays (مبيت)
 builder.Services.AddScoped<VetSystem.API.Vaccinations.VaccinationsService>();
 builder.Services.AddSingleton<VetSystem.Application.Storage.ISignedUrlService,
     VetSystem.Infrastructure.Storage.R2SignedUrlService>();
@@ -267,6 +271,7 @@ builder.Services.AddScoped<ISyncTableHandler, VisitsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ProceduresSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, PrescriptionsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, DailyFollowUpsSyncHandler>();
+builder.Services.AddScoped<ISyncTableHandler, NightStaysSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, VaccinationsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, AttachmentsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, AppointmentsSyncHandler>();
