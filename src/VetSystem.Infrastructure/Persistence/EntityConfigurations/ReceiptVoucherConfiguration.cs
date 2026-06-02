@@ -12,6 +12,7 @@ internal sealed class ReceiptVoucherConfiguration : IEntityTypeConfiguration<Rec
 
         builder.HasKey(v => v.Id);
         builder.Property(v => v.CustomerId).HasColumnName("customer_id").IsRequired();
+        builder.Property(v => v.FarmId).HasColumnName("farm_id");
         builder.Property(v => v.Amount).HasColumnName("amount").HasColumnType("numeric(14,2)");
         builder.Property(v => v.Method).HasColumnName("method").IsRequired().HasMaxLength(16);
         builder.Property(v => v.IssuedBy).HasColumnName("issued_by").IsRequired();
@@ -33,6 +34,11 @@ internal sealed class ReceiptVoucherConfiguration : IEntityTypeConfiguration<Rec
         builder.HasOne<Customer>()
             .WithMany()
             .HasForeignKey(v => v.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<Farm>()
+            .WithMany()
+            .HasForeignKey(v => v.FarmId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne<User>()
