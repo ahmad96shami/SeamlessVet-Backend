@@ -12,6 +12,7 @@ internal sealed class SystemSettingsConfiguration : IEntityTypeConfiguration<Sys
 
         builder.HasKey(s => s.Id);
         builder.Property(s => s.DefaultExamFee).HasColumnName("default_exam_fee").HasColumnType("numeric(14,2)");
+        builder.Property(s => s.DefaultCheckupFee).HasColumnName("default_checkup_fee").HasColumnType("numeric(14,2)");
         builder.Property(s => s.EntitlementEnabledGlobal).HasColumnName("entitlement_enabled_global");
         builder.Property(s => s.LowStockThresholdPct).HasColumnName("low_stock_threshold_pct").HasColumnType("numeric(5,2)");
         builder.Property(s => s.ExpirationWarningDays).HasColumnName("expiration_warning_days");

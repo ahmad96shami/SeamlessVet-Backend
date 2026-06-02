@@ -11,6 +11,13 @@ public sealed class SystemSettings : Entity
 {
     public decimal DefaultExamFee { get; set; }
 
+    /// <summary>
+    /// Default in-clinic checkup fee (رسوم الكشف, M17 / PRD §18.7) auto-applied to new in-clinic
+    /// visits. Night-stay per-night rates + the daily checkout hour live in <see cref="Extra"/>
+    /// (see <c>NightStaySettings</c>).
+    /// </summary>
+    public decimal DefaultCheckupFee { get; set; }
+
     public bool EntitlementEnabledGlobal { get; set; } = true;
 
     public decimal LowStockThresholdPct { get; set; }

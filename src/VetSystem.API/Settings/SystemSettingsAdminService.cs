@@ -1,6 +1,7 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
+using VetSystem.Application.Settings;
 using VetSystem.Application.Settings.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -29,7 +30,7 @@ public sealed class SystemSettingsAdminService
     public async Task<SystemSettingsResponse> GetAsync(CancellationToken cancellationToken)
     {
         var entity = await LoadAsync(cancellationToken);
-        return _mapper.Map<SystemSettingsResponse>(entity);
+        return ToResponse(entity);
     }
 
     public async Task<SystemSettingsResponse> PatchAsync(
@@ -39,6 +40,7 @@ public sealed class SystemSettingsAdminService
         var entity = await LoadAsync(cancellationToken);
 
         if (request.DefaultExamFee.HasValue) entity.DefaultExamFee = request.DefaultExamFee.Value;
+        if (request.DefaultCheckupFee.HasValue) entity.DefaultCheckupFee = request.DefaultCheckupFee.Value;
         if (request.EntitlementEnabledGlobal.HasValue) entity.EntitlementEnabledGlobal = request.EntitlementEnabledGlobal.Value;
         if (request.LowStockThresholdPct.HasValue) entity.LowStockThresholdPct = request.LowStockThresholdPct.Value;
         if (request.ExpirationWarningDays.HasValue) entity.ExpirationWarningDays = request.ExpirationWarningDays.Value;
@@ -48,8 +50,37 @@ public sealed class SystemSettingsAdminService
         if (request.InvoiceTaxDetails is not null) entity.InvoiceTaxDetails = request.InvoiceTaxDetails;
         if (request.Extra is not null) entity.Extra = request.Extra;
 
+        // M17 — night-stay tunables merge into the `extra` bag (applied after a raw Extra set so
+        // explicit fields win; other extra keys are preserved by WriteInto).
+        if (request.NightStayRateMedical.HasValue || request.NightStayRateIcu.HasValue
+            || request.NightStayRateHotel.HasValue || request.NightStayCheckoutHour.HasValue)
+        {
+            var current = NightStaySettings.FromExtra(entity.Extra);
+            var updated = current with
+            {
+                RateMedical = request.NightStayRateMedical ?? current.RateMedical,
+                RateIcu = request.NightStayRateIcu ?? current.RateIcu,
+                RateHotel = request.NightStayRateHotel ?? current.RateHotel,
+                CheckoutHour = request.NightStayCheckoutHour ?? current.CheckoutHour,
+            };
+            entity.Extra = updated.WriteInto(entity.Extra);
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
-        return _mapper.Map<SystemSettingsResponse>(entity);
+        return ToResponse(entity);
+    }
+
+    /// <summary>Maps the entity and folds the night-stay tunables out of the <c>extra</c> bag.</summary>
+    private SystemSettingsResponse ToResponse(SystemSettings entity)
+    {
+        var ns = NightStaySettings.FromExtra(entity.Extra);
+        return _mapper.Map<SystemSettingsResponse>(entity) with
+        {
+            NightStayRateMedical = ns.RateMedical,
+            NightStayRateIcu = ns.RateIcu,
+            NightStayRateHotel = ns.RateHotel,
+            NightStayCheckoutHour = ns.CheckoutHour,
+        };
     }
 
     private async Task<SystemSettings> LoadAsync(CancellationToken cancellationToken)
