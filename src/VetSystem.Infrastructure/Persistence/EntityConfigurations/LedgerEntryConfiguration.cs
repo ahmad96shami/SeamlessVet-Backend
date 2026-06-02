@@ -27,7 +27,7 @@ internal sealed class LedgerEntryConfiguration : IEntityTypeConfiguration<Ledger
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_ledger_entries_type",
-            "entry_type IN ('invoice','service_fee','exam_fee','receipt_voucher','adjustment')"));
+            "entry_type IN ('invoice','service_fee','exam_fee','receipt_voucher','adjustment','checkup_fee','night_stay')"));
 
         // SCHEMA §2: dedupe on sync. UNIQUE per environment so two offline devices retrying the
         // same write collapse to one row.

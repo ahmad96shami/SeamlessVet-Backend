@@ -12,6 +12,7 @@ internal sealed class DailyFollowUpConfiguration : IEntityTypeConfiguration<Dail
 
         builder.HasKey(f => f.Id);
         builder.Property(f => f.VisitId).HasColumnName("visit_id").IsRequired();
+        builder.Property(f => f.NightStayId).HasColumnName("night_stay_id");
         builder.Property(f => f.EntryDate).HasColumnName("entry_date").IsRequired();
         builder.Property(f => f.Condition).HasColumnName("condition");
         builder.Property(f => f.Temperature).HasColumnName("temperature").HasColumnType("numeric(5,2)");
@@ -21,10 +22,17 @@ internal sealed class DailyFollowUpConfiguration : IEntityTypeConfiguration<Dail
         builder.Property(f => f.Notes).HasColumnName("notes");
 
         builder.HasIndex(f => new { f.VisitId, f.EntryDate }).HasDatabaseName("ix_followups_visit");
+        builder.HasIndex(f => f.NightStayId).HasDatabaseName("ix_followups_night_stay");
 
         builder.HasOne<Visit>()
             .WithMany()
             .HasForeignKey(f => f.VisitId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M17 — the boarding episode a daily entry hangs under (null for a non-boarding entry).
+        builder.HasOne<NightStay>()
+            .WithMany()
+            .HasForeignKey(f => f.NightStayId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

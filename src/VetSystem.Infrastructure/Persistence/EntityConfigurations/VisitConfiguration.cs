@@ -38,6 +38,10 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
         builder.Property(v => v.IcdVetCode).HasColumnName("icd_vet_code").HasMaxLength(32);
         builder.Property(v => v.ExamFeeApplied).HasColumnName("exam_fee_applied").HasColumnType("numeric(14,2)");
 
+        // M17 — in-clinic checkup fee + follow-up origin.
+        builder.Property(v => v.CheckupFeeApplied).HasColumnName("checkup_fee_applied").HasColumnType("numeric(14,2)");
+        builder.Property(v => v.FollowUpOfVisitId).HasColumnName("follow_up_of_visit_id");
+
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_visits_type", "visit_type IN ('in_clinic','field')"));
         builder.ToTable(t => t.HasCheckConstraint(
@@ -65,6 +69,8 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
             .HasDatabaseName("ix_visits_contract");
         builder.HasIndex(v => new { v.EnvironmentId, v.FarmId })
             .HasDatabaseName("ix_visits_farm");
+        builder.HasIndex(v => new { v.EnvironmentId, v.FollowUpOfVisitId })
+            .HasDatabaseName("ix_visits_follow_up_of");
 
         builder.HasOne<Customer>()
             .WithMany()
@@ -101,6 +107,12 @@ internal sealed class VisitConfiguration : IEntityTypeConfiguration<Visit>
         builder.HasOne<Contract>()
             .WithMany()
             .HasForeignKey(v => v.ContractId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M17 — a follow-up visit points back at the visit it was scheduled from (self-FK).
+        builder.HasOne<Visit>()
+            .WithMany()
+            .HasForeignKey(v => v.FollowUpOfVisitId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

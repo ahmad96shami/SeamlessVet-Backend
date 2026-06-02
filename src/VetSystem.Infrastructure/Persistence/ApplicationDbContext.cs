@@ -50,6 +50,7 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<Procedure> Procedures => Set<Procedure>();
     public DbSet<Prescription> Prescriptions => Set<Prescription>();
     public DbSet<DailyFollowUp> DailyFollowUps => Set<DailyFollowUp>();
+    public DbSet<NightStay> NightStays => Set<NightStay>();
     public DbSet<Vaccination> Vaccinations => Set<Vaccination>();
     public DbSet<Attachment> Attachments => Set<Attachment>();
 

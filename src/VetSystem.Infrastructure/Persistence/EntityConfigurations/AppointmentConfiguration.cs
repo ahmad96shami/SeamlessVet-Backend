@@ -21,6 +21,10 @@ internal sealed class AppointmentConfiguration : IEntityTypeConfiguration<Appoin
         builder.Property(a => a.Notes).HasColumnName("notes");
         builder.Property(a => a.VisitId).HasColumnName("visit_id");
 
+        // M17 — follow-up scheduled from a visit (PRD §18.8).
+        builder.Property(a => a.IsFollowUp).HasColumnName("is_follow_up").IsRequired().HasDefaultValue(false);
+        builder.Property(a => a.OriginVisitId).HasColumnName("origin_visit_id");
+
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_appointments_status",
             "status IN ('scheduled','confirmed','attended','no_show','cancelled')"));
@@ -55,6 +59,12 @@ internal sealed class AppointmentConfiguration : IEntityTypeConfiguration<Appoin
         builder.HasOne<Visit>()
             .WithMany()
             .HasForeignKey(a => a.VisitId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M17 — the visit this follow-up was scheduled from.
+        builder.HasOne<Visit>()
+            .WithMany()
+            .HasForeignKey(a => a.OriginVisitId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }
