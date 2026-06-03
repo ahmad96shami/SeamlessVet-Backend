@@ -33,6 +33,10 @@ with:
   # Shared CTEs — the doctor's scope anchors, reused across multiple streams. Top-level
   # `with:` makes these available to every stream.
   my_customers: SELECT id AS customer_id FROM customers WHERE assigned_doctor_id = auth.user_id() AND deleted_at IS NULL
+  # M16 — farm ledgers are owned by `farm_id` with `customer_id` NULL (ck_ledgers_owner), so the
+  # `ledgers WHERE customer_id IN my_customers` query below can never match them; this CTE lets
+  # the by_customer stream reach them through the farm's owning customer (Mo8 per-farm balances).
+  my_farms: SELECT id AS farm_id FROM farms WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
   my_visits: SELECT id AS visit_id FROM visits WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
   my_field_inventories: SELECT id AS field_inventory_id FROM field_inventories WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
   my_contracts: SELECT id AS contract_id FROM contracts WHERE responsible_doctor_id = auth.user_id() AND deleted_at IS NULL
@@ -67,6 +71,7 @@ streams:
       - SELECT * FROM pets             WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
       - SELECT * FROM farms            WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
       - SELECT * FROM ledgers          WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+      - SELECT * FROM ledgers          WHERE farm_id     IN (SELECT farm_id     FROM my_farms)     AND deleted_at IS NULL
       - SELECT * FROM ledger_entries   WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
       - SELECT * FROM receipt_vouchers WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
       - SELECT * FROM invoices         WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
