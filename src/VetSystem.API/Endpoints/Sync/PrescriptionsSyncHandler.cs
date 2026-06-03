@@ -44,6 +44,13 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
         var productId = SyncBody.RequireGuid(body, "product_id");
         await EnsureExistsAsync(_db.Products.AnyAsync(p => p.Id == productId, cancellationToken), "product", productId);
 
+        var startAt = SyncBody.OptionalDateTime(body, "start_at");
+        var endAt = SyncBody.OptionalDateTime(body, "end_at");
+        if (startAt is { } s && endAt is { } e && e < s)
+        {
+            throw new ConflictException("invalid_reminder_schedule", "end_at must be on or after start_at.");
+        }
+
         var prescription = new Prescription
         {
             Id = id,
@@ -55,6 +62,14 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
             Notes = SyncBody.OptionalString(body, "notes"),
             DispenseType = SyncBody.RequireString(body, "dispense_type", DispenseType.All, TableName),
             Quantity = SyncBody.OptionalDecimal(body, "quantity"),
+            // M18 reminder schedule (the device authors it; MedicationDueJob reads it). last_reminded_dose
+            // is server-managed and never read from the payload.
+            ReminderEnabled = SyncBody.OptionalBool(body, "reminder_enabled") ?? false,
+            IntervalMinutes = SyncBody.OptionalInt(body, "interval_minutes"),
+            LeadMinutes = SyncBody.OptionalInt(body, "lead_minutes"),
+            StartAt = startAt,
+            EndAt = endAt,
+            DosesCount = SyncBody.OptionalInt(body, "doses_count"),
         };
 
         _db.Prescriptions.Add(prescription);
@@ -68,12 +83,25 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
         var prescription = await _db.Prescriptions.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                            ?? throw new NotFoundException(TableName, id);
 
-        // Advisory text only — product/quantity/dispense_type are immutable post-create (they carry
-        // inventory/billing meaning that already flowed through separate sync writes).
+        // Advisory text + the M18 reminder schedule are editable — product/quantity/dispense_type are
+        // immutable post-create (they carry inventory/billing meaning that already flowed through
+        // separate sync writes). last_reminded_dose stays server-managed (never read from the payload).
         if (SyncBody.TryGetString(body, "dosage", out var dosage)) prescription.Dosage = dosage;
         if (SyncBody.TryGetString(body, "frequency", out var freq)) prescription.Frequency = freq;
         if (SyncBody.TryGetString(body, "duration", out var dur)) prescription.Duration = dur;
         if (SyncBody.TryGetString(body, "notes", out var notes)) prescription.Notes = notes;
+
+        if (SyncBody.OptionalBool(body, "reminder_enabled") is { } reminderEnabled) prescription.ReminderEnabled = reminderEnabled;
+        if (body.TryGetProperty("interval_minutes", out _)) prescription.IntervalMinutes = SyncBody.OptionalInt(body, "interval_minutes");
+        if (body.TryGetProperty("lead_minutes", out _)) prescription.LeadMinutes = SyncBody.OptionalInt(body, "lead_minutes");
+        if (body.TryGetProperty("start_at", out _)) prescription.StartAt = SyncBody.OptionalDateTime(body, "start_at");
+        if (body.TryGetProperty("end_at", out _)) prescription.EndAt = SyncBody.OptionalDateTime(body, "end_at");
+        if (body.TryGetProperty("doses_count", out _)) prescription.DosesCount = SyncBody.OptionalInt(body, "doses_count");
+
+        if (prescription.StartAt is { } s2 && prescription.EndAt is { } e2 && e2 < s2)
+        {
+            throw new ConflictException("invalid_reminder_schedule", "end_at must be on or after start_at.");
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
         return new SyncWriteResult(prescription.Id, prescription.UpdatedAt);

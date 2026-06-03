@@ -149,6 +149,22 @@ internal static class SyncBody
         };
     }
 
+    public static bool? OptionalBool(JsonElement body, string field)
+    {
+        if (!body.TryGetProperty(field, out var element))
+        {
+            return null;
+        }
+
+        return element.ValueKind switch
+        {
+            JsonValueKind.Null => null,
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            _ => throw new ConflictException("invalid_payload", $"'{field}' must be a boolean or null."),
+        };
+    }
+
     public static DateTimeOffset? OptionalDateTime(JsonElement body, string field)
     {
         if (!body.TryGetProperty(field, out var element))

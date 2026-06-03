@@ -107,6 +107,12 @@ public sealed class PrescriptionsService
             Notes = request.Notes,
             DispenseType = request.DispenseType,
             Quantity = quantity,
+            ReminderEnabled = request.ReminderEnabled,
+            IntervalMinutes = request.IntervalMinutes,
+            LeadMinutes = request.LeadMinutes,
+            StartAt = request.StartAt,
+            EndAt = request.EndAt,
+            DosesCount = request.DosesCount,
         };
 
         if (request.DispenseType == DispenseType.AdministeredInClinic)
@@ -169,6 +175,15 @@ public sealed class PrescriptionsService
         if (request.Frequency is not null) rx.Frequency = request.Frequency;
         if (request.Duration is not null) rx.Duration = request.Duration;
         if (request.Notes is not null) rx.Notes = request.Notes;
+
+        // M18 reminder schedule — toggle/retune. Dose numbering anchors (start/interval) can change too;
+        // the job's high-water mark only advances, so a mid-course edit never re-fires a past dose.
+        if (request.ReminderEnabled.HasValue) rx.ReminderEnabled = request.ReminderEnabled.Value;
+        if (request.IntervalMinutes.HasValue) rx.IntervalMinutes = request.IntervalMinutes;
+        if (request.LeadMinutes.HasValue) rx.LeadMinutes = request.LeadMinutes;
+        if (request.StartAt.HasValue) rx.StartAt = request.StartAt;
+        if (request.EndAt.HasValue) rx.EndAt = request.EndAt;
+        if (request.DosesCount.HasValue) rx.DosesCount = request.DosesCount;
 
         await _db.SaveChangesAsync(cancellationToken);
         return _mapper.Map<PrescriptionResponse>(rx);
