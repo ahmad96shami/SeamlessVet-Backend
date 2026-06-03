@@ -43,6 +43,9 @@ public sealed class InventoryMovement : Entity
 
     public Guid? InvoiceId { get; set; }
 
+    /// <summary>M19 — set on a <c>receive</c> leg written by a purchase invoice; links stock to its source.</summary>
+    public Guid? PurchaseInvoiceId { get; set; }
+
     public Guid PerformedBy { get; set; }
 
     public string IdempotencyKey { get; set; } = string.Empty;

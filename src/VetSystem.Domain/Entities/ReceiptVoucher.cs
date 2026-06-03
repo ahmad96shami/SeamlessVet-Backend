@@ -26,5 +26,12 @@ public sealed class ReceiptVoucher : Entity
 
     public string? Notes { get; set; }
 
+    /// <summary>M19 — cheque metadata, set only when <see cref="Method"/> is <c>cheque</c>.</summary>
+    public string? ChequeNumber { get; set; }
+
+    public string? ChequeBank { get; set; }
+
+    public DateOnly? ChequeDueDate { get; set; }
+
     public string IdempotencyKey { get; set; } = string.Empty;
 }
