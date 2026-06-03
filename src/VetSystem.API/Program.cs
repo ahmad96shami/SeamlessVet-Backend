@@ -170,6 +170,13 @@ builder.Services.AddScoped<VetSystem.Application.Financial.IInvoiceNumberValidat
 builder.Services.AddScoped<VetSystem.API.Financial.InvoicesService>();
 builder.Services.AddScoped<VetSystem.API.Financial.ReceiptVouchersService>();
 
+// M19 — suppliers, purchase invoices & supplier payments (accounts payable).
+builder.Services.AddScoped<VetSystem.Application.SupplierLedgers.ISupplierLedgerService,
+    VetSystem.Infrastructure.SupplierLedgers.SupplierLedgerService>();
+builder.Services.AddScoped<VetSystem.API.Suppliers.SuppliersService>();
+builder.Services.AddScoped<VetSystem.API.Suppliers.PurchaseInvoicesService>();
+builder.Services.AddScoped<VetSystem.API.Suppliers.SupplierPaymentsService>();
+
 // M8 — contracts & batches (lifecycle, per-medication pricing, supervision cycles)
 builder.Services.AddScoped<VetSystem.Application.Contracts.IContractLifecycleService,
     VetSystem.Infrastructure.Contracts.ContractLifecycleService>();
