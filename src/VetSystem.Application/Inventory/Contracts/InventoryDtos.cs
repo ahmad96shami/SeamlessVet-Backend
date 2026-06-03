@@ -21,7 +21,8 @@ public sealed record MovementIntent(
     string IdempotencyKey,
     string? Reason = null,
     Guid? VisitId = null,
-    Guid? InvoiceId = null);
+    Guid? InvoiceId = null,
+    Guid? PurchaseInvoiceId = null);
 
 /// <summary>The resulting balance of a single (location, product) stock item after a movement.</summary>
 public sealed record StockBalance(

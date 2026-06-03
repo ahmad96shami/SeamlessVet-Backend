@@ -130,6 +130,7 @@ public sealed class InventoryService : IInventoryService
                 Reason = intent.Reason,
                 VisitId = intent.VisitId,
                 InvoiceId = intent.InvoiceId,
+                PurchaseInvoiceId = intent.PurchaseInvoiceId,
                 PerformedBy = userId,
                 IdempotencyKey = i == 0 ? intent.IdempotencyKey : $"{intent.IdempotencyKey}{SecondLegSuffix}",
             };
