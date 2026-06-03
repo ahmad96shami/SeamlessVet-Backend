@@ -15,9 +15,12 @@ internal sealed class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(p => p.Method).HasColumnName("method").IsRequired().HasMaxLength(16);
         builder.Property(p => p.Amount).HasColumnName("amount").HasColumnType("numeric(14,2)");
         builder.Property(p => p.PaidAt).HasColumnName("paid_at");
+        builder.Property(p => p.ChequeNumber).HasColumnName("cheque_number").HasMaxLength(64);
+        builder.Property(p => p.ChequeBank).HasColumnName("cheque_bank").HasMaxLength(128);
+        builder.Property(p => p.ChequeDueDate).HasColumnName("cheque_due_date");
 
         builder.ToTable(t => t.HasCheckConstraint(
-            "ck_payments_method", "method IN ('cash','card','bank_transfer','credit')"));
+            "ck_payments_method", "method IN ('cash','card','bank_transfer','credit','cheque')"));
 
         builder.HasIndex(p => p.InvoiceId).HasDatabaseName("ix_payments_invoice");
 

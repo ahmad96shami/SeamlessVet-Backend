@@ -18,10 +18,13 @@ internal sealed class ReceiptVoucherConfiguration : IEntityTypeConfiguration<Rec
         builder.Property(v => v.IssuedBy).HasColumnName("issued_by").IsRequired();
         builder.Property(v => v.IssuedAt).HasColumnName("issued_at");
         builder.Property(v => v.Notes).HasColumnName("notes");
+        builder.Property(v => v.ChequeNumber).HasColumnName("cheque_number").HasMaxLength(64);
+        builder.Property(v => v.ChequeBank).HasColumnName("cheque_bank").HasMaxLength(128);
+        builder.Property(v => v.ChequeDueDate).HasColumnName("cheque_due_date");
         builder.Property(v => v.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
 
         builder.ToTable(t => t.HasCheckConstraint(
-            "ck_receipt_vouchers_method", "method IN ('cash','card','bank_transfer','credit')"));
+            "ck_receipt_vouchers_method", "method IN ('cash','card','bank_transfer','credit','cheque')"));
 
         builder.HasIndex(v => new { v.EnvironmentId, v.IdempotencyKey })
             .HasDatabaseName("ux_receipt_vouchers_env_idempotency")

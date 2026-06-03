@@ -21,6 +21,7 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.Property(m => m.Reason).HasColumnName("reason");
         builder.Property(m => m.VisitId).HasColumnName("visit_id");
         builder.Property(m => m.InvoiceId).HasColumnName("invoice_id");
+        builder.Property(m => m.PurchaseInvoiceId).HasColumnName("purchase_invoice_id");
         builder.Property(m => m.PerformedBy).HasColumnName("performed_by").IsRequired();
         builder.Property(m => m.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
 
@@ -64,6 +65,12 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.HasOne<Invoice>()
             .WithMany()
             .HasForeignKey(m => m.InvoiceId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M19 — a `receive` leg written by a purchase invoice tags the movement with its source.
+        builder.HasOne<PurchaseInvoice>()
+            .WithMany()
+            .HasForeignKey(m => m.PurchaseInvoiceId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

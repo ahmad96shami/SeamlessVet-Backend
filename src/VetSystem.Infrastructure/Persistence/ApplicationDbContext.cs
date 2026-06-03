@@ -61,6 +61,14 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<ReceiptVoucher> ReceiptVouchers => Set<ReceiptVoucher>();
 
+    // M19 — suppliers, supplier ledgers, purchase invoices, supplier payments (accounts payable).
+    public DbSet<Supplier> Suppliers => Set<Supplier>();
+    public DbSet<SupplierLedger> SupplierLedgers => Set<SupplierLedger>();
+    public DbSet<SupplierLedgerEntry> SupplierLedgerEntries => Set<SupplierLedgerEntry>();
+    public DbSet<PurchaseInvoice> PurchaseInvoices => Set<PurchaseInvoice>();
+    public DbSet<PurchaseInvoiceItem> PurchaseInvoiceItems => Set<PurchaseInvoiceItem>();
+    public DbSet<SupplierPayment> SupplierPayments => Set<SupplierPayment>();
+
     public DbSet<Contract> Contracts => Set<Contract>();
     public DbSet<ContractMedicationPrice> ContractMedicationPrices => Set<ContractMedicationPrice>();
     public DbSet<ContractFarm> ContractFarms => Set<ContractFarm>();
