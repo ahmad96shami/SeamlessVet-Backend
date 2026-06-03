@@ -31,6 +31,10 @@ public sealed class SystemSettingsPatchRequestValidator : AbstractValidator<Syst
             .InclusiveBetween(0, 23).WithMessage("NightStayCheckoutHour must be in 0–23.")
             .When(r => r.NightStayCheckoutHour.HasValue);
 
+        RuleFor(r => r.MedicationReminderLeadMinutes!.Value)
+            .GreaterThanOrEqualTo(0).WithMessage("MedicationReminderLeadMinutes must be ≥ 0.")
+            .When(r => r.MedicationReminderLeadMinutes.HasValue);
+
         RuleFor(r => r.LowStockThresholdPct!.Value)
             .InclusiveBetween(0m, 100m).WithMessage("LowStockThresholdPct must be in 0–100.")
             .When(r => r.LowStockThresholdPct.HasValue);

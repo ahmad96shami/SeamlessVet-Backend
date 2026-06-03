@@ -66,20 +66,30 @@ public sealed class SystemSettingsAdminService
             entity.Extra = updated.WriteInto(entity.Extra);
         }
 
+        // M18 — default medication-reminder lead-time merges into the same `extra` bag (other keys preserved).
+        if (request.MedicationReminderLeadMinutes.HasValue)
+        {
+            var current = MedicationReminderSettings.FromExtra(entity.Extra);
+            var updated = current with { DefaultLeadMinutes = request.MedicationReminderLeadMinutes.Value };
+            entity.Extra = updated.WriteInto(entity.Extra);
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         return ToResponse(entity);
     }
 
-    /// <summary>Maps the entity and folds the night-stay tunables out of the <c>extra</c> bag.</summary>
+    /// <summary>Maps the entity and folds the night-stay + medication-reminder tunables out of the <c>extra</c> bag.</summary>
     private SystemSettingsResponse ToResponse(SystemSettings entity)
     {
         var ns = NightStaySettings.FromExtra(entity.Extra);
+        var mr = MedicationReminderSettings.FromExtra(entity.Extra);
         return _mapper.Map<SystemSettingsResponse>(entity) with
         {
             NightStayRateMedical = ns.RateMedical,
             NightStayRateIcu = ns.RateIcu,
             NightStayRateHotel = ns.RateHotel,
             NightStayCheckoutHour = ns.CheckoutHour,
+            MedicationReminderLeadMinutes = mr.DefaultLeadMinutes,
         };
     }
 

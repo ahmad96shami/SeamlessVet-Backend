@@ -22,6 +22,8 @@ public sealed record SystemSettingsResponse(
     decimal NightStayRateIcu,
     decimal NightStayRateHotel,
     int NightStayCheckoutHour,
+    // M18 — default medication-reminder lead-time (minutes before a dose), surfaced from the `extra` bag.
+    int MedicationReminderLeadMinutes,
     DateTimeOffset UpdatedAt);
 
 /// <summary>
@@ -44,4 +46,5 @@ public sealed record SystemSettingsPatchRequest(
     decimal? NightStayRateMedical,
     decimal? NightStayRateIcu,
     decimal? NightStayRateHotel,
-    int? NightStayCheckoutHour);
+    int? NightStayCheckoutHour,
+    int? MedicationReminderLeadMinutes);
