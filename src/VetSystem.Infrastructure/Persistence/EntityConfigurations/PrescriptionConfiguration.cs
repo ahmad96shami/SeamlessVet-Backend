@@ -20,11 +20,26 @@ internal sealed class PrescriptionConfiguration : IEntityTypeConfiguration<Presc
         builder.Property(p => p.DispenseType).HasColumnName("dispense_type").IsRequired().HasMaxLength(24);
         builder.Property(p => p.Quantity).HasColumnName("quantity").HasColumnType("numeric(14,3)");
 
+        // M18 — recurring-dose reminder schedule (only meaningful when reminder_enabled).
+        builder.Property(p => p.ReminderEnabled).HasColumnName("reminder_enabled").IsRequired().HasDefaultValue(false);
+        builder.Property(p => p.IntervalMinutes).HasColumnName("interval_minutes");
+        builder.Property(p => p.LeadMinutes).HasColumnName("lead_minutes");
+        builder.Property(p => p.StartAt).HasColumnName("start_at");
+        builder.Property(p => p.EndAt).HasColumnName("end_at");
+        builder.Property(p => p.DosesCount).HasColumnName("doses_count");
+        builder.Property(p => p.LastRemindedDose).HasColumnName("last_reminded_dose");
+
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_prescriptions_dispense_type",
             "dispense_type IN ('administered_in_clinic','dispensed_to_owner')"));
 
         builder.HasIndex(p => p.VisitId).HasDatabaseName("ix_prescriptions_visit");
+
+        // MedicationDueJob scans only the active-reminder set per environment — a partial index keeps
+        // that scan cheap as the prescriptions table grows.
+        builder.HasIndex(p => p.EnvironmentId)
+            .HasDatabaseName("ix_prescriptions_reminder_active")
+            .HasFilter("reminder_enabled = true AND deleted_at IS NULL");
 
         builder.HasOne<Visit>()
             .WithMany()
