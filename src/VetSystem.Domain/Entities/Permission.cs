@@ -55,6 +55,9 @@ public static class PermissionKey
     // Reporting (M12)
     public const string ReportsRead = "reports.read";
 
+    // Suppliers, purchase invoices & supplier payments (M19)
+    public const string SuppliersWrite = "suppliers.write";
+
     public static readonly IReadOnlyCollection<string> All =
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
@@ -68,5 +71,6 @@ public static class PermissionKey
         EntitlementsApprove,
         PartnershipManage,
         ReportsRead,
+        SuppliersWrite,
     ];
 }

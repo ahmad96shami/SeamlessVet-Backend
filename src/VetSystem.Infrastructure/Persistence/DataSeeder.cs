@@ -304,6 +304,12 @@ public sealed class DataSeeder
             """
             TRUNCATE TABLE
               doctor_entitlements,
+              supplier_ledger_entries,
+              supplier_payments,
+              purchase_invoice_items,
+              purchase_invoices,
+              supplier_ledgers,
+              suppliers,
               payments,
               invoice_items,
               receipt_vouchers,
@@ -359,6 +365,8 @@ public sealed class DataSeeder
                 PermissionKey.ContractsWrite,
                 PermissionKey.ContractsActivate,
                 PermissionKey.EntitlementsApprove,
+                // M19: the accountant manages suppliers, records purchase invoices, and pays suppliers.
+                PermissionKey.SuppliersWrite,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -412,6 +420,7 @@ public sealed class DataSeeder
         PermissionKey.EntitlementsApprove => "Close customer accounts and approve/pay doctor entitlements.",
         PermissionKey.PartnershipManage => "Manage partners and partnership profit shares (partnership environments only).",
         PermissionKey.ReportsRead => "View operational and financial reports.",
+        PermissionKey.SuppliersWrite => "Manage suppliers, record purchase invoices, and pay suppliers.",
         _ => key,
     };
 }
