@@ -36,7 +36,9 @@ with:
   # M16 — farm ledgers are owned by `farm_id` with `customer_id` NULL (ck_ledgers_owner), so the
   # `ledgers WHERE customer_id IN my_customers` query below can never match them; this CTE lets
   # the by_customer stream reach them through the farm's owning customer (Mo8 per-farm balances).
-  my_farms: SELECT id AS farm_id FROM farms WHERE customer_id IN (SELECT customer_id FROM my_customers) AND deleted_at IS NULL
+  # NOTE: the customers filter is inlined — a CTE referencing another CTE (`… IN (SELECT
+  # customer_id FROM my_customers)`) compiles but evaluates to an empty set on 1.21.0.
+  my_farms: SELECT id AS farm_id FROM farms WHERE customer_id IN (SELECT id FROM customers WHERE assigned_doctor_id = auth.user_id() AND deleted_at IS NULL) AND deleted_at IS NULL
   my_visits: SELECT id AS visit_id FROM visits WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
   my_field_inventories: SELECT id AS field_inventory_id FROM field_inventories WHERE doctor_id = auth.user_id() AND deleted_at IS NULL
   my_contracts: SELECT id AS contract_id FROM contracts WHERE responsible_doctor_id = auth.user_id() AND deleted_at IS NULL
