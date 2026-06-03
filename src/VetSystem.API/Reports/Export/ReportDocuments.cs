@@ -3,6 +3,7 @@ using VetSystem.Application.Entitlements.Contracts;
 using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Application.Partnership;
 using VetSystem.Application.Reports.Contracts;
+using Codes = VetSystem.Domain.Entities;
 
 namespace VetSystem.API.Reports.Export;
 
@@ -299,6 +300,71 @@ public static class ReportDocuments
                     ReportCell.Id(v.CustomerId),
                     ReportCell.Day(v.DateGiven),
                     ReportCell.Day(v.NextDueDate))).ToList()),
+        ]);
+
+    // ----- M20 task 1: pharmacy profit ----------------------------------------------------------
+    public static ReportDocument PharmacyProfit(PharmacyProfitReportResponse r) => new(
+        Title: ReportLabels.PharmacyProfitTitle,
+        FileBaseName: "pharmacy-profit",
+        Filters: Fields(DayField(ReportLabels.From, r.From), DayField(ReportLabels.To, r.To)),
+        Summary: Fields(
+            MoneyField(ReportLabels.Revenue, r.Revenue),
+            MoneyField(ReportLabels.Cost, r.Cost),
+            MoneyField(ReportLabels.Profit, r.Profit),
+            IntField(ReportLabels.TotalCount, r.TotalCount)),
+        Tables:
+        [
+            new ReportTable(
+                Caption: null,
+                Columns:
+                [
+                    new ReportColumn(ReportLabels.Product, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.QuantitySold, ReportCellKind.Number),
+                    new ReportColumn(ReportLabels.Revenue, ReportCellKind.Money),
+                    new ReportColumn(ReportLabels.Cost, ReportCellKind.Money),
+                    new ReportColumn(ReportLabels.Profit, ReportCellKind.Money),
+                ],
+                Rows: r.Rows.Select(row => Row(
+                    ReportCell.Text(row.ProductName),
+                    ReportCell.Number(row.QuantitySold),
+                    ReportCell.Money(row.Revenue),
+                    ReportCell.Money(row.Cost),
+                    ReportCell.Money(row.Profit))).ToList()),
+        ]);
+
+    // ----- M20 task 2: in-clinic / field visit profit (one mapper, title by visit type) ---------
+    public static ReportDocument VisitProfit(VisitProfitReportResponse r) => new(
+        Title: r.VisitType == Codes.VisitType.Field ? ReportLabels.FieldVisitProfitTitle : ReportLabels.InClinicVisitProfitTitle,
+        FileBaseName: r.VisitType == Codes.VisitType.Field ? "field-visit-profit" : "in-clinic-visit-profit",
+        Filters: Fields(
+            DayField(ReportLabels.From, r.From),
+            DayField(ReportLabels.To, r.To),
+            Opt(ReportLabels.ScopeLabel, r.Scope is null ? null : ReportLabels.ScopeName(r.Scope))),
+        Summary: Fields(
+            IntField(ReportLabels.VisitCount, r.VisitCount),
+            MoneyField(ReportLabels.Revenue, r.Revenue),
+            MoneyField(ReportLabels.Cogs, r.Cogs),
+            MoneyField(ReportLabels.Profit, r.Profit)),
+        Tables:
+        [
+            new ReportTable(
+                Caption: null,
+                Columns:
+                [
+                    new ReportColumn(ReportLabels.VisitNumber, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.Customer, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.Farm, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.Revenue, ReportCellKind.Money),
+                    new ReportColumn(ReportLabels.Cogs, ReportCellKind.Money),
+                    new ReportColumn(ReportLabels.Profit, ReportCellKind.Money),
+                ],
+                Rows: r.Rows.Select(v => Row(
+                    ReportCell.Text(v.VisitNumber ?? "—"),
+                    ReportCell.Id(v.CustomerId),
+                    ReportCell.Id(v.FarmId),
+                    ReportCell.Money(v.Revenue),
+                    ReportCell.Money(v.Cogs),
+                    ReportCell.Money(v.Profit))).ToList()),
         ]);
 
     // ----- shared helpers -----------------------------------------------------------------------

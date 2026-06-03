@@ -40,6 +40,9 @@ public sealed class ReportsModule : IEndpointModule
         group.MapGet("/field-doctor-visits", FieldDoctorVisits).WithName("Reports_FieldDoctorVisits");
         group.MapGet("/kpi-summary", KpiSummary).WithName("Reports_KpiSummary");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
+        group.MapGet("/pharmacy-profit", PharmacyProfit).WithName("Reports_PharmacyProfit");
+        group.MapGet("/in-clinic-visit-profit", InClinicVisitProfit).WithName("Reports_InClinicVisitProfit");
+        group.MapGet("/field-visit-profit", FieldVisitProfit).WithName("Reports_FieldVisitProfit");
 
         // M12 task 15 — doctor self-service. Auth-only (NOT gated on reports.read), self-scoped to the
         // caller: a field/clinic doctor sees only their own attributed income. Separate group so it
@@ -235,5 +238,52 @@ public sealed class ReportsModule : IEndpointModule
     {
         var report = await svc.BuildAsync(from, to, customerId, skip, take, cancellationToken);
         return export.Resolve(format, report, ReportDocuments.UpcomingVaccinations);
+    }
+
+    /// <summary>GET /reports/pharmacy-profit — drug/product revenue, cost and gross margin per product (M20).</summary>
+    private static async Task<IResult> PharmacyProfit(
+        PharmacyProfitReportService svc,
+        ReportExporter export,
+        DateOnly? from,
+        DateOnly? to,
+        int? skip,
+        int? take,
+        string? format,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, skip, take, cancellationToken);
+        return export.Resolve(format, report, ReportDocuments.PharmacyProfit);
+    }
+
+    /// <summary>GET /reports/in-clinic-visit-profit — revenue/COGS/margin per in-clinic visit, farm/clinic-sliceable (M20).</summary>
+    private static async Task<IResult> InClinicVisitProfit(
+        InClinicVisitProfitReportService svc,
+        ReportExporter export,
+        DateOnly? from,
+        DateOnly? to,
+        string? scope,
+        int? skip,
+        int? take,
+        string? format,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, scope, skip, take, cancellationToken);
+        return export.Resolve(format, report, ReportDocuments.VisitProfit);
+    }
+
+    /// <summary>GET /reports/field-visit-profit — revenue/COGS/margin per field visit, farm/clinic-sliceable (M20).</summary>
+    private static async Task<IResult> FieldVisitProfit(
+        FieldVisitProfitReportService svc,
+        ReportExporter export,
+        DateOnly? from,
+        DateOnly? to,
+        string? scope,
+        int? skip,
+        int? take,
+        string? format,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, scope, skip, take, cancellationToken);
+        return export.Resolve(format, report, ReportDocuments.VisitProfit);
     }
 }

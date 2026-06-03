@@ -259,6 +259,11 @@ builder.Services.AddScoped<VetSystem.API.Reports.FieldDoctorVisitsReportService>
 builder.Services.AddScoped<VetSystem.API.Reports.KpiSummaryReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.UpcomingVaccinationsReportService>();
 
+// M20 — profit reports (PRD §7.9): pharmacy gross margin + in-clinic / field visit profit.
+builder.Services.AddScoped<VetSystem.API.Reports.PharmacyProfitReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.InClinicVisitProfitReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.FieldVisitProfitReportService>();
+
 // M12 tasks 12–13 — report export (?format=xlsx|pdf). Renderers are stateless and thread-safe, so they
 // are singletons; the exporter picks JSON vs. a generated file. ClosedXML and QuestPDF each live in
 // exactly one renderer (VetSystem.API.Reports.Export).

@@ -24,6 +24,9 @@ public static class ReportLabels
     public const string FieldDoctorVisitsTitle = "سجل الزيارات الميدانية";
     public const string KpiSummaryTitle = "ملخص المؤشرات";
     public const string UpcomingVaccinationsTitle = "التطعيمات القادمة";
+    public const string PharmacyProfitTitle = "تقرير أرباح الصيدلية";
+    public const string InClinicVisitProfitTitle = "تقرير أرباح زيارات العيادة";
+    public const string FieldVisitProfitTitle = "تقرير أرباح الزيارات الميدانية";
 
     // ----- Shared field / column labels ----------------------------------------------------------
     public const string From = "من تاريخ";
@@ -40,6 +43,8 @@ public static class ReportLabels
     public const string Status = "الحالة";
     public const string System = "نظام الاحتساب";
     public const string Count = "العدد";
+    public const string Farm = "المزرعة";
+    public const string ScopeLabel = "النطاق";
 
     // Summary KPI labels
     public const string DoctorCount = "عدد الأطباء";
@@ -56,6 +61,9 @@ public static class ReportLabels
     public const string TaxCollected = "الضريبة المحصّلة";
     public const string DrugCost = "تكلفة الأدوية";
     public const string DrugProfit = "ربح الأدوية";
+    public const string Cost = "التكلفة";
+    public const string Profit = "الربح";
+    public const string QuantitySold = "الكمية المباعة";
     public const string ExamFee = "رسوم الكشف";
     public const string DoctorShare = "حصة الطبيب";
     public const string ClinicShare = "حصة العيادة";
@@ -113,6 +121,7 @@ public static class ReportLabels
     public static string CustomerType(string? code) => Lookup(CustomerTypes, code);
     public static string LedgerEntryType(string? code) => Lookup(LedgerEntryTypes, code);
     public static string LedgerStatus(string? code) => Lookup(LedgerStatuses, code);
+    public static string ScopeName(string? code) => Lookup(Scopes, code);
 
     private static string Lookup(IReadOnlyDictionary<string, string> map, string? code) =>
         code is not null && map.TryGetValue(code, out var label) ? label : code ?? "—";
@@ -197,5 +206,13 @@ public static class ReportLabels
         [Codes.LedgerStatus.Open] = "مفتوح",
         [Codes.LedgerStatus.HasDebt] = "عليه دين",
         [Codes.LedgerStatus.Closed] = "مغلق",
+    };
+
+    // The farm/clinic slicer on the visit-profit reports (M20). Codes are not domain enums — they are
+    // the report's own query values, so they live here rather than in Domain.
+    private static readonly IReadOnlyDictionary<string, string> Scopes = new Dictionary<string, string>
+    {
+        ["farm"] = "مزرعة",
+        ["clinic"] = "عيادة",
     };
 }
