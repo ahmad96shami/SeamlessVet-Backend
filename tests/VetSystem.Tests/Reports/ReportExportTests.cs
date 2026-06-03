@@ -198,6 +198,22 @@ public sealed class ReportExportTests
                     new UpcomingVaccinationRow(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
                         "داء الكلب", new DateOnly(2026, 1, 15), new DateOnly(2026, 4, 15)),
                 ])));
+
+        yield return ("pharmacy-profit", ReportDocuments.PharmacyProfit(new PharmacyProfitReportResponse(
+            From, To, Revenue: 150m, Cost: 60m, Profit: 90m, TotalCount: 2,
+            Rows:
+            [
+                new PharmacyProfitRow(Guid.NewGuid(), "مضاد حيوي", QuantitySold: 6m, Revenue: 150m, Cost: 60m, Profit: 90m),
+                new PharmacyProfitRow(Guid.NewGuid(), "فيتامينات", QuantitySold: 3m, Revenue: 60m, Cost: 30m, Profit: 30m),
+            ])));
+
+        yield return ("in-clinic-visit-profit", ReportDocuments.VisitProfit(new VisitProfitReportResponse(
+            From, To, VisitType.InClinic, Scope: "clinic", Revenue: 90m, Cogs: 20m, Profit: 70m, VisitCount: 1,
+            Rows: [new VisitProfitRow(Guid.NewGuid(), "A-1", Guid.NewGuid(), null, 90m, 20m, 70m)])));
+
+        yield return ("field-visit-profit", ReportDocuments.VisitProfit(new VisitProfitReportResponse(
+            From, To, VisitType.Field, Scope: "farm", Revenue: 100m, Cogs: 40m, Profit: 60m, VisitCount: 1,
+            Rows: [new VisitProfitRow(Guid.NewGuid(), "A-2", Guid.NewGuid(), Guid.NewGuid(), 100m, 40m, 60m)])));
     }
 
     private static SalesReportResponse SampleSales() => new(
