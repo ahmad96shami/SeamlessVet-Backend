@@ -20,12 +20,14 @@ public sealed class VaccinationsService
     private readonly ApplicationDbContext _db;
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IMapper _mapper;
+    private readonly IClock _clock;
 
-    public VaccinationsService(ApplicationDbContext db, ICurrentUserAccessor currentUser, IMapper mapper)
+    public VaccinationsService(ApplicationDbContext db, ICurrentUserAccessor currentUser, IMapper mapper, IClock clock)
     {
         _db = db;
         _currentUser = currentUser;
         _mapper = mapper;
+        _clock = clock;
     }
 
     public async Task<IReadOnlyList<VaccinationResponse>> ListAsync(
@@ -38,6 +40,38 @@ public sealed class VaccinationsService
 
         var rows = await query
             .OrderByDescending(v => v.DateGiven)
+            .Skip(Math.Max(0, skip ?? 0))
+            .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(_mapper.Map<VaccinationResponse>).ToList();
+    }
+
+    /// <summary>
+    /// M18 task 6 — the upcoming-vaccination calendar query (PRD §6.7). Lists vaccinations whose
+    /// <c>next_due_date</c> falls in the requested range, soonest first. <paramref name="from"/> defaults
+    /// to today (genuinely "upcoming"); pass an explicit range to drive a calendar view of any window.
+    /// Environment-scoped via the global query filter and auth-only — a field doctor can see the schedule
+    /// without the admin-gated <c>/reports/upcoming-vaccinations</c>.
+    /// </summary>
+    public async Task<IReadOnlyList<VaccinationResponse>> ListUpcomingAsync(
+        DateOnly? from, DateOnly? to, Guid? petId, Guid? customerId, int? skip, int? take,
+        CancellationToken cancellationToken)
+    {
+        var fromDate = from ?? DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime);
+        if (to is { } upper && upper < fromDate)
+        {
+            throw new ConflictException("invalid_period", "'to' must be on or after 'from'.");
+        }
+
+        var query = _db.Vaccinations.AsNoTracking().Where(v => v.NextDueDate != null && v.NextDueDate >= fromDate);
+        if (to is { } t) query = query.Where(v => v.NextDueDate <= t);
+        if (petId is { } pid) query = query.Where(v => v.PetId == pid);
+        if (customerId is { } cid) query = query.Where(v => v.CustomerId == cid);
+
+        var rows = await query
+            .OrderBy(v => v.NextDueDate)
+            .ThenBy(v => v.Id)
             .Skip(Math.Max(0, skip ?? 0))
             .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
             .ToListAsync(cancellationToken);
