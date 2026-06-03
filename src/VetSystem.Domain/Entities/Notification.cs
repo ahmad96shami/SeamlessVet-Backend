@@ -31,6 +31,7 @@ public static class NotificationType
     public const string AppointmentReminder = "appointment_reminder";
     public const string FollowUpDue = "follow_up_due";
     public const string VaccinationDue = "vaccination_due";
+    public const string MedicationDue = "medication_due";
     public const string LowStock = "low_stock";
     public const string ExpiryWarning = "expiry_warning";
     public const string RegistrationRequest = "registration_request";
@@ -41,7 +42,7 @@ public static class NotificationType
 
     public static readonly IReadOnlyCollection<string> All =
     [
-        AppointmentReminder, FollowUpDue, VaccinationDue, LowStock, ExpiryWarning,
+        AppointmentReminder, FollowUpDue, VaccinationDue, MedicationDue, LowStock, ExpiryWarning,
         RegistrationRequest, NegativeStock, AccountReadyForSettlement, EntitlementApproved, ReportDelivery,
     ];
 }
