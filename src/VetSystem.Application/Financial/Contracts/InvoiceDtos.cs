@@ -15,11 +15,17 @@ public sealed record InvoiceLineRequest(
     decimal? UnitPrice,
     decimal DiscountAmount = 0m);
 
-/// <summary>A payment leg. Several may be sent for a mixed payment (PRD §5.4).</summary>
+/// <summary>
+/// A payment leg. Several may be sent for a mixed payment (PRD §5.4). M19: a <c>cheque</c> leg may
+/// carry optional metadata and settles immediately (like cash).
+/// </summary>
 public sealed record PaymentRequest(
     Guid? Id,
     string Method,
-    decimal Amount);
+    decimal Amount,
+    string? ChequeNumber = null,
+    string? ChequeBank = null,
+    DateOnly? ChequeDueDate = null);
 
 /// <summary>
 /// POS issuance (M7 task 3). <c>CustomerId</c> null = walk-in (no ledger posting, PRD §5.4).
@@ -83,7 +89,10 @@ public sealed record PaymentResponse(
     Guid InvoiceId,
     string Method,
     decimal Amount,
-    DateTimeOffset PaidAt);
+    DateTimeOffset PaidAt,
+    string? ChequeNumber,
+    string? ChequeBank,
+    DateOnly? ChequeDueDate);
 
 public sealed record InvoiceResponse(
     Guid Id,
@@ -118,7 +127,10 @@ public sealed record ReceiptVoucherRequest(
     decimal Amount,
     string Method,
     string? Notes,
-    string IdempotencyKey);
+    string IdempotencyKey,
+    string? ChequeNumber = null,
+    string? ChequeBank = null,
+    DateOnly? ChequeDueDate = null);
 
 public sealed record ReceiptVoucherResponse(
     Guid Id,
@@ -129,4 +141,7 @@ public sealed record ReceiptVoucherResponse(
     Guid IssuedBy,
     DateTimeOffset IssuedAt,
     string? Notes,
+    string? ChequeNumber,
+    string? ChequeBank,
+    DateOnly? ChequeDueDate,
     DateTimeOffset CreatedAt);

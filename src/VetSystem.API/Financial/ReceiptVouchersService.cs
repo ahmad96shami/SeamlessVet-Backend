@@ -94,6 +94,9 @@ public sealed class ReceiptVouchersService
             IssuedBy = userId,
             IssuedAt = _clock.UtcNow,
             Notes = request.Notes,
+            ChequeNumber = request.ChequeNumber,
+            ChequeBank = request.ChequeBank,
+            ChequeDueDate = request.ChequeDueDate,
             IdempotencyKey = request.IdempotencyKey,
         };
 

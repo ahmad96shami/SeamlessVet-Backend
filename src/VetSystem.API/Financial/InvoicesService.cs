@@ -190,6 +190,9 @@ public sealed class InvoicesService
                 Method = payment.Method,
                 Amount = Money(payment.Amount),
                 PaidAt = _clock.UtcNow,
+                ChequeNumber = payment.ChequeNumber,
+                ChequeBank = payment.ChequeBank,
+                ChequeDueDate = payment.ChequeDueDate,
             });
         }
 
@@ -463,6 +466,9 @@ public sealed class InvoicesService
                 Method = payment.Method,
                 Amount = Money(payment.Amount),
                 PaidAt = _clock.UtcNow,
+                ChequeNumber = payment.ChequeNumber,
+                ChequeBank = payment.ChequeBank,
+                ChequeDueDate = payment.ChequeDueDate,
             });
         }
 
