@@ -161,6 +161,10 @@ internal static class SyncBody
             JsonValueKind.Null => null,
             JsonValueKind.True => true,
             JsonValueKind.False => false,
+            // SQLite has no boolean type — PowerSync clients store flags as 0/1 INTEGER columns
+            // and the upload connector replays the row verbatim, so a device-written bool arrives
+            // as a JSON number. Accept exactly 0/1 (anything else is still a malformed payload).
+            JsonValueKind.Number when element.TryGetInt32(out var n) && n is 0 or 1 => n == 1,
             _ => throw new ConflictException("invalid_payload", $"'{field}' must be a boolean or null."),
         };
     }
