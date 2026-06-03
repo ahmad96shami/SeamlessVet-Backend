@@ -45,7 +45,7 @@ Dev ports (set in `src/VetSystem.API/Properties/launchSettings.json`):
 - Store R2 object keys in DB columns; mint short-lived (5-min) signed URLs on read. Never store or return public URLs.
 - Any value an admin can tune (exam fee, profit-distribution %, doctor-entitlement global toggle, low-stock threshold, expiration-warning days, tax enable/rate) must be editable in the Admin Configuration UI with no redeploy — these map to the `system_settings` table.
 - Log errors with sufficient context (function name, relevant IDs) via Serilog.
-- `main` is protected; always create a new branch for a task if you're not already on one.
+- **Single-branch workflow (solo dev):** work directly on `main` — do **not** create per-task/per-milestone branches. Keep commits atomic in the format below.
 - Commit format: `milestone N / sub-commit M: <change>` for milestone work, `milestone N / hotfix: <fix>` for milestone bugfixes, `pre-milestone hygiene: <change>` for cross-cutting cleanup that doesn't belong to a specific milestone. `N` references the milestone numbers in `docs/tasks.md` (M0–M14). Ask if the milestone number isn't obvious.
 - When creating a PR, the base must be the `sandbox` branch.
 
