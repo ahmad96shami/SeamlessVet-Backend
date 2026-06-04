@@ -18,7 +18,8 @@ public sealed record LoginRequest(string PhonePrimary, string Password);
 /// admin-assigned per-environment prefix used to mint per-user `{prefix}-{seq}` visit and
 /// invoice numbers client-side (PRD §6.2; mobile mints `visit_number` for the field
 /// doctor's offline visits — Mo2). Null when no prefix is assigned (admin/accountant
-/// roles never get one).
+/// roles never get one). <see cref="FullName"/> powers the clients' greeting / profile
+/// header (MoD) — the JWT itself carries no name claim.
 /// </summary>
 public sealed record TokenPair(
     string AccessToken,
@@ -27,6 +28,7 @@ public sealed record TokenPair(
     DateTimeOffset RefreshTokenExpiresAt,
     Guid UserId,
     string RoleKey,
+    string FullName,
     string? NumberPrefix);
 
 public sealed record RefreshRequest(string RefreshToken);

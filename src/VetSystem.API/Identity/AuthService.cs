@@ -177,6 +177,7 @@ public sealed class AuthService
             rotated.ExpiresAt,
             user.Id,
             roleKey,
+            user.FullName,
             user.NumberPrefix);
     }
 
@@ -211,6 +212,7 @@ public sealed class AuthService
             stored.ExpiresAt,
             user.Id,
             roleKey,
+            user.FullName,
             user.NumberPrefix);
     }
 
