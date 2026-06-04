@@ -8,10 +8,10 @@ namespace VetSystem.Infrastructure.Identity;
 public sealed class EfRefreshTokenStore : IRefreshTokenStore
 {
     private readonly ApplicationDbContext _db;
-    private readonly IPasswordHasher _hasher;
+    private readonly IRefreshTokenHasher _hasher;
     private readonly IClock _clock;
 
-    public EfRefreshTokenStore(ApplicationDbContext db, IPasswordHasher hasher, IClock clock)
+    public EfRefreshTokenStore(ApplicationDbContext db, IRefreshTokenHasher hasher, IClock clock)
     {
         _db = db;
         _hasher = hasher;
@@ -44,19 +44,21 @@ public sealed class EfRefreshTokenStore : IRefreshTokenStore
         Guid environmentId,
         CancellationToken cancellationToken)
     {
-        // Cannot WHERE on hash because BCrypt is salt-randomised — scan candidates in the env
-        // and verify each. In practice this set is small (one user's outstanding refreshes
-        // typically ≤ 5) because we revoke on rotation.
+        // Deterministic SHA-256 → exact match via ix_refresh_tokens_hash. The previous BCrypt
+        // scan verified every active row in the env (~300ms each), so a single failed refresh
+        // hung for minutes once a few hundred logins accumulated.
         var now = _clock.UtcNow;
-        var candidates = await _db.RefreshTokens
+        var hash = _hasher.Hash(rawToken);
+        var match = await _db.RefreshTokens
             .IgnoreQueryFilters()
-            .Where(t => t.EnvironmentId == environmentId
-                        && t.RevokedAt == null
-                        && t.ExpiresAt > now
-                        && t.DeletedAt == null)
-            .ToListAsync(cancellationToken);
+            .FirstOrDefaultAsync(
+                t => t.TokenHash == hash
+                     && t.EnvironmentId == environmentId
+                     && t.RevokedAt == null
+                     && t.ExpiresAt > now
+                     && t.DeletedAt == null,
+                cancellationToken);
 
-        var match = candidates.FirstOrDefault(t => _hasher.Verify(rawToken, t.TokenHash));
         return match is null ? null : ToStored(match);
     }
 

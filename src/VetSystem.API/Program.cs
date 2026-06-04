@@ -104,6 +104,7 @@ builder.Services.AddSingleton<IPowerSyncTokenService, PowerSyncTokenService>();
 
 // M1 — identity, RBAC, admin approval
 builder.Services.AddSingleton<IPasswordHasher, VetSystem.Infrastructure.Identity.BCryptPasswordHasher>();
+builder.Services.AddSingleton<IRefreshTokenHasher, VetSystem.Infrastructure.Identity.Sha256RefreshTokenHasher>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRefreshTokenStore, VetSystem.Infrastructure.Identity.EfRefreshTokenStore>();
 builder.Services.AddScoped<IPermissionResolver, VetSystem.Infrastructure.Identity.PermissionResolver>();

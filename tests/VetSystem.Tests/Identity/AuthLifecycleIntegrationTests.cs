@@ -29,6 +29,7 @@ public sealed class AuthLifecycleIntegrationTests
         var admin = await SeedAdminAsync(scope);
 
         var hasher = new BCryptPasswordHasher();
+        var tokenHasher = new Sha256RefreshTokenHasher();
         var clock = new FakeClock(DateTimeOffset.UtcNow);
         var jwtOptions = Options.Create(new JwtOptions
         {
@@ -46,7 +47,7 @@ public sealed class AuthLifecycleIntegrationTests
             anonDb,
             hasher,
             new JwtTokenService(jwtOptions, clock),
-            new EfRefreshTokenStore(anonDb, hasher, clock),
+            new EfRefreshTokenStore(anonDb, tokenHasher, clock),
             clock,
             jwtOptions);
 
@@ -100,7 +101,7 @@ public sealed class AuthLifecycleIntegrationTests
             userDb,
             hasher,
             new JwtTokenService(jwtOptions, clock),
-            new EfRefreshTokenStore(userDb, hasher, clock),
+            new EfRefreshTokenStore(userDb, tokenHasher, clock),
             clock,
             jwtOptions);
 
