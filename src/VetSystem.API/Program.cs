@@ -240,6 +240,7 @@ builder.Services.AddHttpClient<VetSystem.Application.Notifications.IPushSender,
     VetSystem.Infrastructure.Notifications.ExpoPushSender>(client => client.Timeout = TimeSpan.FromSeconds(10));
 builder.Services.AddSingleton<VetSystem.API.Notifications.PushQueue>();
 builder.Services.AddHostedService<VetSystem.API.Notifications.PushDispatchHostedService>();
+builder.Services.AddScoped<VetSystem.API.Devices.DeviceTokensService>();
 
 // Domain-event → notification handlers (dispatched in a fresh scope by DispatchingDomainEventPublisher).
 builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.NegativeStockAttemptedEvent>,
