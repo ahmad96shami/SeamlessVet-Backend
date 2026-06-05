@@ -77,6 +77,7 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<DoctorEntitlement> DoctorEntitlements => Set<DoctorEntitlement>();
 
     public DbSet<Notification> Notifications => Set<Notification>();
+    public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 
     /// <summary>
     /// Read by the global env-scoped query filter on every materialization. Returns
