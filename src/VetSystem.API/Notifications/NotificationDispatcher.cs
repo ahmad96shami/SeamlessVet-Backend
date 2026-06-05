@@ -17,11 +17,16 @@ public sealed class NotificationDispatcher : INotificationDispatcher
 {
     private readonly ApplicationDbContext _db;
     private readonly IHubContext<NotificationsHub, INotificationClient> _hub;
+    private readonly PushQueue _pushQueue;
 
-    public NotificationDispatcher(ApplicationDbContext db, IHubContext<NotificationsHub, INotificationClient> hub)
+    public NotificationDispatcher(
+        ApplicationDbContext db,
+        IHubContext<NotificationsHub, INotificationClient> hub,
+        PushQueue pushQueue)
     {
         _db = db;
         _hub = hub;
+        _pushQueue = pushQueue;
     }
 
     public async Task DispatchAsync(NotificationDispatch dispatch, CancellationToken cancellationToken)
@@ -54,5 +59,16 @@ public sealed class NotificationDispatcher : INotificationDispatcher
             var push = new NotificationPayload(row.Id, row.Type, row.Title, row.Body, payloadElement, row.CreatedAt, row.ReadAt);
             await _hub.Clients.Group(NotificationGroups.User(row.UserId)).ReceiveNotification(push);
         }
+
+        // M21 — remote push rides the same commit, but off-thread: callers (domain-event handlers on
+        // hot business paths) must never wait on an external HTTPS call. Per-recipient row ids travel
+        // along so each device's deeplink lands on its owner's feed row.
+        _pushQueue.Enqueue(new PushJob(
+            dispatch.EnvironmentId,
+            rows.Select(r => new PushRecipient(r.UserId, r.Id)).ToList(),
+            dispatch.Type,
+            dispatch.Title,
+            dispatch.Body,
+            payloadJson));
     }
 }

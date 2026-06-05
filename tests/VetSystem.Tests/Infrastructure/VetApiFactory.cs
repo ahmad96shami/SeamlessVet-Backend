@@ -8,6 +8,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.IdentityModel.Tokens;
 using VetSystem.API.Identity;
 using VetSystem.Application.Common;
+using VetSystem.Application.Notifications;
 
 namespace VetSystem.Tests.Infrastructure;
 
@@ -49,6 +50,13 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
     /// the registered <c>SystemClock</c> for the whole host when set.
     /// </summary>
     public IClock? Clock { get; init; }
+
+    /// <summary>
+    /// Optional <see cref="IPushSender"/> override (M21). Set to a recording fake so push-dispatch
+    /// tests never reach the real Expo API. Replaces the typed-HttpClient registration; the push
+    /// worker resolves the sender per job from the scope, so a singleton fake slots straight in.
+    /// </summary>
+    public IPushSender? PushSender { get; init; }
 
     /// <summary>
     /// Turns the <c>/sync/*</c> rate limiter on (it is off in the Test environment by default so the
@@ -98,6 +106,12 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
             {
                 services.RemoveAll<IClock>();
                 services.AddSingleton(Clock);
+            }
+
+            if (PushSender is not null)
+            {
+                services.RemoveAll<IPushSender>();
+                services.AddSingleton(PushSender);
             }
 
             services.PostConfigure<JwtOptions>(opts =>
