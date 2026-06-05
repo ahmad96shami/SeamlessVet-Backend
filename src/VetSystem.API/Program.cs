@@ -232,6 +232,13 @@ builder.Services.AddScoped<VetSystem.Application.Notifications.INotificationDisp
 builder.Services.AddScoped<VetSystem.API.Notifications.NotificationRecipientResolver>();
 builder.Services.AddScoped<VetSystem.API.Notifications.NotificationsService>();
 
+// M21 — out-of-process push (Expo). The typed client is the repo's first IHttpClientFactory use;
+// a short timeout keeps the best-effort send from ever wedging the push worker.
+builder.Services.Configure<VetSystem.Infrastructure.Notifications.ExpoPushOptions>(
+    builder.Configuration.GetSection(VetSystem.Infrastructure.Notifications.ExpoPushOptions.SectionName));
+builder.Services.AddHttpClient<VetSystem.Application.Notifications.IPushSender,
+    VetSystem.Infrastructure.Notifications.ExpoPushSender>(client => client.Timeout = TimeSpan.FromSeconds(10));
+
 // Domain-event → notification handlers (dispatched in a fresh scope by DispatchingDomainEventPublisher).
 builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.NegativeStockAttemptedEvent>,
     VetSystem.API.Notifications.Handlers.NegativeStockAttemptedHandler>();
