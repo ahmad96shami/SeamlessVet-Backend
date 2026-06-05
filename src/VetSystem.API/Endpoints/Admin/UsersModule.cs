@@ -21,6 +21,12 @@ public sealed class UsersModule : IEndpointModule
             .RequirePermission(PermissionKey.UsersManage)
             .WithName("Admin_Users_Get");
 
+        group.MapPost("/", Create)
+            .RequirePermission(PermissionKey.UsersManage)
+            .AddEndpointFilter<ValidationFilter<CreateUserRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("user_create"))
+            .WithName("Admin_Users_Create");
+
         group.MapPost("/{id:guid}/deactivate", Deactivate)
             .RequirePermission(PermissionKey.UsersManage)
             .AddEndpointFilter(new IdempotencyKeyFilter("user_deactivate"))
@@ -54,6 +60,15 @@ public sealed class UsersModule : IEndpointModule
     private static async Task<IResult> Get(Guid id, UserAdminService admin, CancellationToken cancellationToken)
     {
         var user = await admin.GetUserAsync(id, cancellationToken);
+        return TypedResults.Ok(user);
+    }
+
+    private static async Task<IResult> Create(
+        CreateUserRequest request,
+        UserAdminService admin,
+        CancellationToken cancellationToken)
+    {
+        var user = await admin.CreateUserAsync(request, cancellationToken);
         return TypedResults.Ok(user);
     }
 

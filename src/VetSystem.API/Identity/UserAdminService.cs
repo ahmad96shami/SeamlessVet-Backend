@@ -22,19 +22,22 @@ public sealed class UserAdminService
     private readonly IPermissionResolver _permissionResolver;
     private readonly IClock _clock;
     private readonly ICurrentUserAccessor _currentUser;
+    private readonly IPasswordHasher _hasher;
 
     public UserAdminService(
         ApplicationDbContext db,
         INumberPrefixGenerator prefixes,
         IPermissionResolver permissionResolver,
         IClock clock,
-        ICurrentUserAccessor currentUser)
+        ICurrentUserAccessor currentUser,
+        IPasswordHasher hasher)
     {
         _db = db;
         _prefixes = prefixes;
         _permissionResolver = permissionResolver;
         _clock = clock;
         _currentUser = currentUser;
+        _hasher = hasher;
     }
 
     public async Task<IReadOnlyList<RegistrationRequestSummary>> ListPendingAsync(
@@ -160,6 +163,65 @@ public sealed class UserAdminService
             row.u.LicenseDetails,
             row.u.CreatedAt,
             overrides);
+    }
+
+    /// <summary>
+    /// POST /admin/users — an admin-created staff account (cashier, in-clinic doctor, …) that
+    /// skips the self-registration queue: active immediately, number prefix assigned, and the
+    /// field inventory provisioned for field roles — the same activation work
+    /// <see cref="ApproveAsync"/> performs. No registration_requests row is written (there was
+    /// never a pending request to review).
+    /// </summary>
+    public async Task<UserResponse> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
+    {
+        if (!RoleKey.All.Contains(request.RoleKey))
+        {
+            throw new ConflictException("invalid_role", $"Role '{request.RoleKey}' is not a valid role key.");
+        }
+
+        // Env-scoped by the global query filter (the admin's JWT carries environment_id).
+        var role = await _db.Roles.FirstOrDefaultAsync(r => r.Key == request.RoleKey, cancellationToken)
+            ?? throw new ConflictException("role_not_seeded", $"Role '{request.RoleKey}' is not seeded in this environment.");
+
+        var phone = request.PhonePrimary.Trim();
+        if (await _db.Users.AnyAsync(u => u.PhonePrimary == phone, cancellationToken))
+        {
+            throw new ConflictException("phone_in_use", "An account with this phone number already exists.");
+        }
+
+        var user = new User
+        {
+            EnvironmentId = role.EnvironmentId,
+            RoleId = role.Id,
+            FullName = request.FullName.Trim(),
+            PhonePrimary = phone,
+            Email = request.Email?.Trim(),
+            PasswordHash = _hasher.Hash(request.Password),
+            Status = UserStatus.Active,
+            NumberPrefix = await _prefixes.GenerateUniqueAsync(role.EnvironmentId, cancellationToken),
+            LicenseNumber = request.LicenseNumber?.Trim(),
+            LicenseDetails = request.LicenseDetails,
+        };
+
+        // Two saves like RegisterAsync: the auditing interceptor stamps user.Id on the first,
+        // so the field inventory's DoctorId FK resolves on the second.
+        _db.Users.Add(user);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await EnsureFieldInventoryAsync(user, role.Key, cancellationToken);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new UserResponse(
+            user.Id,
+            user.FullName,
+            user.PhonePrimary,
+            user.Email,
+            role.Key,
+            role.Name,
+            user.Status,
+            user.NumberPrefix,
+            user.LicenseNumber,
+            user.CreatedAt);
     }
 
     public async Task<RegistrationRequestSummary> ApproveAsync(

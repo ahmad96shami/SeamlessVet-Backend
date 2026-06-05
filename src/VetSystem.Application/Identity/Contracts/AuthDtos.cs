@@ -41,6 +41,19 @@ public sealed record RejectRequest(string Notes);
 
 public sealed record PermissionOverrideRequest(string PermissionKey, string Effect);
 
+/// <summary>
+/// POST /admin/users body — an admin-created staff account (cashier, in-clinic doctor, …) that
+/// skips the self-registration approval queue and is active immediately.
+/// </summary>
+public sealed record CreateUserRequest(
+    string FullName,
+    string PhonePrimary,
+    string? Email,
+    string Password,
+    string RoleKey,
+    string? LicenseNumber,
+    string? LicenseDetails);
+
 public sealed record RegistrationRequestSummary(
     Guid Id,
     Guid UserId,

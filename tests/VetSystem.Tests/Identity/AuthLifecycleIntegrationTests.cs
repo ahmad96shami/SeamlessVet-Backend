@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -87,7 +88,7 @@ public sealed class AuthLifecycleIntegrationTests
         var cache = new MemoryCache(new MemoryCacheOptions());
         var resolver = new PermissionResolver(adminDb, cache);
         var prefixes = new NumberPrefixGenerator(adminDb);
-        var adminSvc = new UserAdminService(adminDb, prefixes, resolver, clock, adminUser);
+        var adminSvc = new UserAdminService(adminDb, prefixes, resolver, clock, adminUser, hasher);
 
         var approved = await adminSvc.ApproveAsync(
             registered.RegistrationRequestId,
@@ -140,6 +141,83 @@ public sealed class AuthLifecycleIntegrationTests
             CancellationToken.None);
         (await postLogout.Should().ThrowAsync<ForbiddenException>())
             .Which.Code.Should().Be("invalid_refresh_token");
+    }
+
+    /// <summary>
+    /// POST /admin/users — admin-created accounts skip the registration queue: active
+    /// immediately (login works with no approval), prefix assigned, duplicate phone rejected,
+    /// and field roles get their moving warehouse provisioned like an approval would.
+    /// </summary>
+    [Fact]
+    public async Task AdminCreate_ActiveImmediately_CanLogin_FieldRoleGetsInventory()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        await SeedRolesAndPermissionsAsync(scope);
+        var admin = await SeedAdminAsync(scope);
+
+        var hasher = new BCryptPasswordHasher();
+        var clock = new FakeClock(DateTimeOffset.UtcNow);
+        var adminUser = new FakeCurrentUser
+        {
+            IsAuthenticated = true,
+            EnvironmentId = scope.EnvironmentId,
+            UserId = admin.Id,
+            Role = RoleKey.Admin,
+        };
+        await using var adminDb = scope.CreateDbContext(adminUser);
+        var cache = new MemoryCache(new MemoryCacheOptions());
+        var adminSvc = new UserAdminService(
+            adminDb,
+            new NumberPrefixGenerator(adminDb),
+            new PermissionResolver(adminDb, cache),
+            clock,
+            adminUser,
+            hasher);
+
+        // --- Create a cashier — active immediately with a prefix, no approval round-trip ---
+        var cashier = await adminSvc.CreateUserAsync(
+            new CreateUserRequest("Front Cashier", "+970555333444", null, "Cashier_pw_1!", RoleKey.Cashier, null, null),
+            CancellationToken.None);
+
+        cashier.Status.Should().Be(UserStatus.Active);
+        cashier.RoleKey.Should().Be(RoleKey.Cashier);
+        cashier.NumberPrefix.Should().NotBeNullOrEmpty();
+
+        // --- The new account can log in straight away ---
+        var jwtOptions = Options.Create(new JwtOptions
+        {
+            Issuer = "test",
+            Audience = "test",
+            SecretKey = "integration-test-secret-key-min-32-bytes-123",
+            AccessTokenMinutes = 15,
+            RefreshTokenDays = 7,
+        });
+        await using var anonDb = scope.CreateDbContext(new FakeCurrentUser { EnvironmentId = scope.EnvironmentId });
+        var auth = new AuthService(
+            anonDb,
+            hasher,
+            new JwtTokenService(jwtOptions, clock),
+            new EfRefreshTokenStore(anonDb, new Sha256RefreshTokenHasher(), clock),
+            clock,
+            jwtOptions);
+
+        var pair = await auth.LoginAsync(
+            scope.EnvironmentId,
+            new LoginRequest("+970555333444", "Cashier_pw_1!"),
+            CancellationToken.None);
+        pair.RoleKey.Should().Be(RoleKey.Cashier);
+
+        // --- Duplicate phone is rejected ---
+        Func<Task> dup = () => adminSvc.CreateUserAsync(
+            new CreateUserRequest("Dup", "+970555333444", null, "Other_pw_123", RoleKey.Receptionist, null, null),
+            CancellationToken.None);
+        (await dup.Should().ThrowAsync<ConflictException>()).Which.Code.Should().Be("phone_in_use");
+
+        // --- A field role gets its moving warehouse provisioned in the same call ---
+        var fieldVet = await adminSvc.CreateUserAsync(
+            new CreateUserRequest("Created Field Vet", "+970555333445", null, "FieldVet_pw_1!", RoleKey.VetField, "LIC-9", null),
+            CancellationToken.None);
+        (await adminDb.FieldInventories.AnyAsync(f => f.DoctorId == fieldVet.Id)).Should().BeTrue();
     }
 
     private static async Task SeedRolesAndPermissionsAsync(PgTestScope scope)

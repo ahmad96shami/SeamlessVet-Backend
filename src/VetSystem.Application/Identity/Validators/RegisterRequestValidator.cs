@@ -60,6 +60,21 @@ public sealed class RejectRequestValidator : AbstractValidator<RejectRequest>
     }
 }
 
+public sealed class CreateUserRequestValidator : AbstractValidator<CreateUserRequest>
+{
+    public CreateUserRequestValidator()
+    {
+        RuleFor(r => r.FullName).NotEmpty().MaximumLength(128);
+        RuleFor(r => r.PhonePrimary).NotEmpty().MaximumLength(32)
+            .Matches(@"^\+?[0-9\- ]{7,32}$")
+            .WithMessage("PhonePrimary must be 7–32 digits, optionally with + - or spaces.");
+        RuleFor(r => r.Email).EmailAddress().MaximumLength(255).When(r => !string.IsNullOrWhiteSpace(r.Email));
+        RuleFor(r => r.Password).NotEmpty().MinimumLength(8).MaximumLength(128);
+        RuleFor(r => r.RoleKey).NotEmpty();
+        RuleFor(r => r.LicenseNumber).MaximumLength(64);
+    }
+}
+
 public sealed class PermissionOverrideRequestValidator : AbstractValidator<PermissionOverrideRequest>
 {
     public PermissionOverrideRequestValidator()
