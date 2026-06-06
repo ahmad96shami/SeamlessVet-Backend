@@ -137,6 +137,60 @@ public sealed class EntitlementSettlementService
         return new CloseAccountResponse(farm.CustomerId, farm.Id, ledger.Id, ledger.Status, ledger.ClosedAt, entitlements);
     }
 
+    /// <summary>
+    /// Re-open a customer's <b>own</b> ledger so a returning customer's new visit can be billed. A
+    /// settled account is closed to release entitlements; once the customer is back, the cashier
+    /// re-opens it explicitly (charges never auto-reopen). Idempotent: a non-closed ledger is left
+    /// untouched. Already-released entitlements stay released — re-opening only lifts the append lock.
+    /// </summary>
+    public async Task<CloseAccountResponse> ReopenCustomerAccountAsync(Guid customerId, CancellationToken cancellationToken)
+    {
+        RequireUser();
+
+        var ledger = await _db.Ledgers.FirstOrDefaultAsync(l => l.CustomerId == customerId, cancellationToken)
+                     ?? throw new NotFoundException("ledger", customerId);
+
+        Reopen(ledger);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new CloseAccountResponse(
+            customerId, FarmId: null, ledger.Id, ledger.Status, ledger.ClosedAt, []);
+    }
+
+    /// <summary>M16 — re-open a single <b>farm</b> ledger (mirror of <see cref="CloseFarmAccountAsync"/>).</summary>
+    public async Task<CloseAccountResponse> ReopenFarmAccountAsync(Guid farmId, CancellationToken cancellationToken)
+    {
+        RequireUser();
+
+        var farm = await _db.Farms
+            .Where(f => f.Id == farmId)
+            .Select(f => new { f.Id, f.CustomerId })
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("farm", farmId);
+
+        var ledger = await _db.Ledgers.FirstOrDefaultAsync(l => l.FarmId == farmId, cancellationToken)
+                     ?? throw new NotFoundException("ledger", farmId);
+
+        Reopen(ledger);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        return new CloseAccountResponse(
+            farm.CustomerId, farm.Id, ledger.Id, ledger.Status, ledger.ClosedAt, []);
+    }
+
+    /// <summary>Lifts the closed lock: status recomputes from the balance (open vs. has_debt) and the
+    /// close timestamp is cleared. A no-op if the ledger isn't closed.</summary>
+    private static void Reopen(Ledger ledger)
+    {
+        if (ledger.Status != LedgerStatus.Closed)
+        {
+            return;
+        }
+
+        ledger.Status = ledger.Balance > 0m ? LedgerStatus.HasDebt : LedgerStatus.Open;
+        ledger.ClosedAt = null;
+    }
+
     /// <summary>Closes a ledger once its balance is exactly zero (partial payments never release).</summary>
     private async Task EnsureClosedAsync(Ledger ledger, CancellationToken cancellationToken)
     {

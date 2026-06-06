@@ -55,6 +55,12 @@ public sealed class FarmsModule : IEndpointModule
             .RequirePermission(PermissionKey.EntitlementsApprove)
             .AddEndpointFilter(new IdempotencyKeyFilter("close_farm_account"))
             .WithName("Farms_CloseAccount");
+
+        // M16 — re-open a settled (closed) farm ledger so its new visits can be billed (mirror of close).
+        group.MapPost("/{id:guid}/reopen-account", ReopenAccount)
+            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .AddEndpointFilter(new IdempotencyKeyFilter("reopen_farm_account"))
+            .WithName("Farms_ReopenAccount");
     }
 
     private static async Task<IResult> List(
@@ -117,6 +123,15 @@ public sealed class FarmsModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var result = await settlement.CloseFarmAccountAsync(id, cancellationToken);
+        return TypedResults.Ok(result);
+    }
+
+    private static async Task<IResult> ReopenAccount(
+        Guid id,
+        EntitlementSettlementService settlement,
+        CancellationToken cancellationToken)
+    {
+        var result = await settlement.ReopenFarmAccountAsync(id, cancellationToken);
         return TypedResults.Ok(result);
     }
 }

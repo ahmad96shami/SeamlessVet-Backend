@@ -55,6 +55,13 @@ public sealed class CustomersModule : IEndpointModule
             .RequirePermission(PermissionKey.EntitlementsApprove)
             .AddEndpointFilter(new IdempotencyKeyFilter("close_account"))
             .WithName("Customers_CloseAccount");
+
+        // Re-open a settled (closed) own ledger so a returning customer's new visit can be billed.
+        // Same settlement authority as close; idempotent.
+        group.MapPost("/{id:guid}/reopen-account", ReopenAccount)
+            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .AddEndpointFilter(new IdempotencyKeyFilter("reopen_account"))
+            .WithName("Customers_ReopenAccount");
     }
 
     private static async Task<IResult> List(
@@ -119,6 +126,15 @@ public sealed class CustomersModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var result = await settlement.CloseCustomerAccountAsync(id, cancellationToken);
+        return TypedResults.Ok(result);
+    }
+
+    private static async Task<IResult> ReopenAccount(
+        Guid id,
+        EntitlementSettlementService settlement,
+        CancellationToken cancellationToken)
+    {
+        var result = await settlement.ReopenCustomerAccountAsync(id, cancellationToken);
         return TypedResults.Ok(result);
     }
 }
