@@ -69,28 +69,27 @@ public sealed class CustomersService
             customers = customers.Where(c => c.AssignedDoctorId == doctorId);
         }
 
-        // M16: filter by the customer's AGGREGATE ledger state (own ledger + all its farm ledgers) via
-        // correlated subqueries, so ordering + paging stay on the customer entity. "Owned ledgers of c"
-        // = the own ledger (l.CustomerId == c.Id) plus every farm ledger whose farm belongs to c.
-        //   closed   = no owned ledger is non-closed (every one is closed);
+        // M16 — filter by the customer's settled rollup (must match Aggregate() above). Aggregate
+        // balance = Σ over the own ledger (l.CustomerId == c.Id) + every farm ledger whose farm
+        // belongs to c.
         //   has_debt = Σ owned balances > 0;
-        //   open     = at least one owned ledger is non-closed AND the aggregate is not in debt.
+        //   closed   = no debt AND the OWN ledger is closed (a zero-balance open farm doesn't matter);
+        //   open     = no debt AND the own ledger is not closed.
         if (ledgerStatus is { } status)
         {
             customers = status switch
             {
-                LedgerStatus.Closed => customers.Where(c =>
-                    !_db.Ledgers.Any(l =>
-                        (l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
-                        && l.Status != LedgerStatus.Closed)),
                 LedgerStatus.HasDebt => customers.Where(c =>
                     _db.Ledgers
                         .Where(l => l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
                         .Sum(l => l.Balance) > 0m),
+                LedgerStatus.Closed => customers.Where(c =>
+                    _db.Ledgers.Any(l => l.CustomerId == c.Id && l.Status == LedgerStatus.Closed)
+                    && _db.Ledgers
+                        .Where(l => l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
+                        .Sum(l => l.Balance) <= 0m),
                 _ => customers.Where(c =>
-                    _db.Ledgers.Any(l =>
-                        (l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
-                        && l.Status != LedgerStatus.Closed)
+                    !_db.Ledgers.Any(l => l.CustomerId == c.Id && l.Status == LedgerStatus.Closed)
                     && _db.Ledgers
                         .Where(l => l.CustomerId == c.Id || _db.Farms.Any(f => f.Id == l.FarmId && f.CustomerId == c.Id))
                         .Sum(l => l.Balance) <= 0m),
@@ -179,20 +178,20 @@ public sealed class CustomersService
     }
 
     /// <summary>
-    /// Folds an owner's own ledger + its farm ledgers into the aggregate balance and status: balance
-    /// is the simple sum; status is <c>closed</c> only when every owning ledger is closed, else
-    /// <c>has_debt</c> when the aggregate is positive, else <c>open</c>.
+    /// Folds an owner's own ledger + its farm ledgers into the aggregate balance and status. Balance
+    /// is the simple sum. Status is a <b>settled rollup</b>: outstanding debt anywhere wins
+    /// (<c>has_debt</c>); otherwise the customer reads <c>closed</c> once their <b>own</b> ledger is
+    /// closed — a zero-balance farm ledger left open does not keep them open — else <c>open</c>.
+    /// (The per-ledger <c>status</c> stays authoritative for settlement; this is a display rollup, so
+    /// <c>closed</c> here doesn't imply every farm ledger was individually closed.)
     /// </summary>
     private static (decimal Balance, string Status) Aggregate(
         decimal ownBalance, string? ownStatus, IReadOnlyList<OwnerLedger> farmLedgers)
     {
         var aggregate = ownBalance + farmLedgers.Sum(f => f.Balance);
-        var hasAnyLedger = ownStatus is not null || farmLedgers.Count > 0;
-        var allClosed = (ownStatus is null || ownStatus == LedgerStatus.Closed)
-                        && farmLedgers.All(f => f.Status == LedgerStatus.Closed);
 
-        var status = hasAnyLedger && allClosed ? LedgerStatus.Closed
-            : aggregate > 0m ? LedgerStatus.HasDebt
+        var status = aggregate > 0m ? LedgerStatus.HasDebt
+            : ownStatus == LedgerStatus.Closed ? LedgerStatus.Closed
             : LedgerStatus.Open;
 
         return (aggregate, status);

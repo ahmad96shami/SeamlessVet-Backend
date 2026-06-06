@@ -31,8 +31,9 @@ public sealed record CustomerPatchRequest(
 /// <summary>
 /// Customer read projection. M16: <c>Balance</c> and <c>LedgerStatus</c> are the customer's
 /// <b>aggregate</b> across its own ledger (pet/clinic charges) and all its farm ledgers — own balance
-/// + Σ farm balances; status is <c>closed</c> only when every owning ledger is closed, else
-/// <c>has_debt</c> when the aggregate is positive, else <c>open</c>. Positive balance = the customer
+/// + Σ farm balances. <c>LedgerStatus</c> is a <b>settled rollup</b>: <c>has_debt</c> when the
+/// aggregate is positive, else <c>closed</c> when the customer's own ledger is closed (a zero-balance
+/// farm ledger left open doesn't keep them open), else <c>open</c>. Positive balance = the customer
 /// owes the clinic. <c>OwnBalance</c> is the customer's own (non-farm) ledger alone. <c>FarmLedgers</c>
 /// is the per-farm breakdown — populated by the single-customer detail read, null on the list. All of
 /// these are read-only — the ledgers are server-authoritative.
