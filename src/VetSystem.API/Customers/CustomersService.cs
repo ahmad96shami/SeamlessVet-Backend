@@ -134,7 +134,7 @@ public sealed class CustomersService
         var (aggregate, aggregateStatus) = Aggregate(
             ownBalance, own?.Status, farmLedgers.Select(f => new OwnerLedger(f.Balance, f.Status)).ToList());
 
-        return ToResponse(customer, aggregate, aggregateStatus, ownBalance, farmLedgers);
+        return ToResponse(customer, aggregate, aggregateStatus, ownBalance, farmLedgers, own?.Status);
     }
 
     /// <summary>
@@ -174,7 +174,7 @@ public sealed class CustomersService
             farmsByCustomer.TryGetValue(c.Id, out var farms);
             var ownBalance = own?.Balance ?? 0m;
             var (aggregate, aggregateStatus) = Aggregate(ownBalance, own?.Status, farms ?? []);
-            return ToResponse(c, aggregate, aggregateStatus, ownBalance, farmLedgers: null);
+            return ToResponse(c, aggregate, aggregateStatus, ownBalance, farmLedgers: null, own?.Status);
         }).ToList();
     }
 
@@ -204,13 +204,15 @@ public sealed class CustomersService
         decimal aggregateBalance,
         string aggregateStatus,
         decimal ownBalance,
-        IReadOnlyList<CustomerFarmLedger>? farmLedgers) =>
+        IReadOnlyList<CustomerFarmLedger>? farmLedgers,
+        string? ownLedgerStatus = null) =>
         _mapper.Map<CustomerResponse>(customer) with
         {
             Balance = aggregateBalance,
             LedgerStatus = aggregateStatus,
             OwnBalance = ownBalance,
             FarmLedgers = farmLedgers,
+            OwnLedgerStatus = ownLedgerStatus,
         };
 
     private sealed record OwnerLedger(decimal Balance, string Status);
@@ -268,7 +270,7 @@ public sealed class CustomersService
 
         // The ledger was created in the same transaction above — balance 0, status open; a new
         // customer has no farms yet, so aggregate == own.
-        return ToResponse(entity, ledger.Balance, ledger.Status, ledger.Balance, farmLedgers: null);
+        return ToResponse(entity, ledger.Balance, ledger.Status, ledger.Balance, farmLedgers: null, ledger.Status);
     }
 
     public async Task<CustomerResponse> UpdateAsync(
@@ -304,7 +306,8 @@ public sealed class CustomersService
         var ledger = await _db.Ledgers.AsNoTracking()
             .FirstOrDefaultAsync(l => l.CustomerId == entity.Id, cancellationToken);
         var ownBalance = ledger?.Balance ?? 0m;
-        return ToResponse(entity, ownBalance, ledger?.Status ?? LedgerStatus.Open, ownBalance, farmLedgers: null);
+        var ownStatus = ledger?.Status ?? LedgerStatus.Open;
+        return ToResponse(entity, ownBalance, ownStatus, ownBalance, farmLedgers: null, ownStatus);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)

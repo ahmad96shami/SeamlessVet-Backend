@@ -36,6 +36,10 @@ public sealed record CustomerPatchRequest(
 /// owes the clinic. <c>OwnBalance</c> is the customer's own (non-farm) ledger alone. <c>FarmLedgers</c>
 /// is the per-farm breakdown — populated by the single-customer detail read, null on the list. All of
 /// these are read-only — the ledgers are server-authoritative.
+/// <para><c>OwnLedgerStatus</c> is the own (non-farm) ledger's status alone (vs. <c>LedgerStatus</c>
+/// which is the aggregate). Clients posting to a specific ledger — e.g. a receipt voucher — need it
+/// to tell an open own ledger from a closed one when the aggregate reads open only because a farm
+/// ledger is open.</para>
 /// </summary>
 public sealed record CustomerResponse(
     Guid Id,
@@ -53,7 +57,8 @@ public sealed record CustomerResponse(
     decimal OwnBalance,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    IReadOnlyList<CustomerFarmLedger>? FarmLedgers = null);
+    IReadOnlyList<CustomerFarmLedger>? FarmLedgers = null,
+    string? OwnLedgerStatus = null);
 
 /// <summary>M16 — one farm's ledger state in the customer detail breakdown.</summary>
 public sealed record CustomerFarmLedger(
