@@ -58,6 +58,7 @@ public sealed class ProfitPerBatchReportService
             asOf,
             split.DistributedTotal,
             split.Retained,
-            split.Allocations);
+            split.Allocations,
+            SettlementDiscount: breakdown.SettlementDiscount);
     }
 }

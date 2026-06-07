@@ -38,6 +38,10 @@ public interface IEntitlementService
 /// the drug profit the clinic keeps: under System A it is <c>DrugProfit − DoctorShare</c> (the doctor's
 /// share comes out of drug profit); under System B or when the toggle is disabled it is the whole
 /// <c>DrugProfit</c> (the doctor's fee, if any, is paid separately — not out of drug profit).
+/// <para>M24 — for a settled batch every figure is on the settled numbers: <see cref="Revenue"/>
+/// includes the repricing delta, sale values resolve through the settlement lines, and
+/// <see cref="SettlementDiscount"/> (deducted from the System-A basis like the exam fee) is surfaced
+/// so per-batch reporting can show the clinic's true net.</para>
 /// </summary>
 public sealed record BatchEntitlementBreakdown(
     Guid BatchId,
@@ -52,4 +56,5 @@ public sealed record BatchEntitlementBreakdown(
     decimal ExamFee,
     decimal DoctorShare,
     decimal? CeilingApplied,
-    decimal ClinicShare);
+    decimal ClinicShare,
+    decimal SettlementDiscount = 0m);

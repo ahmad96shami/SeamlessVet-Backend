@@ -69,17 +69,39 @@ public sealed class EntitlementService : IEntitlementService
 
         var (effectiveInvoices, productItems) = await LoadEffectiveInvoicesAsync(
             i => i.BatchId == batchId, cancellationToken);
-        var revenue = effectiveInvoices.Values.Sum(i => i.Total);
 
-        // sale_value (task 6): the contract-overridden price where an active contract applies on the
+        // M24 — a settled batch (تصفية) supersedes the billed/contract prices: the negotiated
+        // per-product price wins, the revenue basis becomes the settled one (pre-discount), and the
+        // batch-level discount enters the System-A basis below (invariant #8, client decisions).
+        var settlement = await _db.BatchSettlements.AsNoTracking()
+            .FirstOrDefaultAsync(s => s.BatchId == batchId, cancellationToken);
+        var settledPrices = settlement is null
+            ? new Dictionary<Guid, decimal>()
+            : await _db.BatchSettlementLines.AsNoTracking()
+                .Where(l => l.SettlementId == settlement.Id)
+                .ToDictionaryAsync(l => l.ProductId, l => l.SettledUnitPrice, cancellationToken);
+
+        var revenue = effectiveInvoices.Values.Sum(i => i.Total) + (settlement?.RepricingDelta ?? 0m);
+
+        // sale_value (task 6 + M24): the settlement-line price where the batch is settled and the
+        // product has one, else the contract-overridden price where an active contract applies on the
         // invoice date, else the line's snapshotted unit_price. cost is the line's cost_price snapshot.
         var lines = new List<DrugProfitLine>(productItems.Count);
         var drugCost = 0m;
         foreach (var item in productItems)
         {
-            var asOf = DateOnly.FromDateTime(effectiveInvoices[item.InvoiceId].IssuedAt.UtcDateTime);
-            var resolved = await _pricing.ResolveUnitPriceAsync(item.ProductId!.Value, batch.CustomerId, asOf, cancellationToken);
-            var saleValue = resolved.IsContractPrice ? resolved.UnitPrice : item.UnitPrice;
+            decimal saleValue;
+            if (settledPrices.TryGetValue(item.ProductId!.Value, out var settledPrice))
+            {
+                saleValue = settledPrice;
+            }
+            else
+            {
+                var asOf = DateOnly.FromDateTime(effectiveInvoices[item.InvoiceId].IssuedAt.UtcDateTime);
+                var resolved = await _pricing.ResolveUnitPriceAsync(item.ProductId!.Value, batch.CustomerId, asOf, cancellationToken);
+                saleValue = resolved.IsContractPrice ? resolved.UnitPrice : item.UnitPrice;
+            }
+
             lines.Add(new DrugProfitLine(saleValue, item.CostPrice, item.Quantity));
             drugCost += item.CostPrice * item.Quantity;
         }
@@ -106,17 +128,23 @@ public sealed class EntitlementService : IEntitlementService
             amount = system switch
             {
                 EntitlementSystem.DrugProfit => _systemA.Calculate(
-                    new SystemAInput(lines, examFee, batch.DoctorSharePercent ?? 0m, batch.DoctorShareCeiling)),
+                    new SystemAInput(
+                        lines, examFee, batch.DoctorSharePercent ?? 0m, batch.DoctorShareCeiling,
+                        SettlementDiscount: settlement?.DiscountAmount ?? 0m)),
                 EntitlementSystem.DirectFee => _systemB.Calculate(examFee),
                 _ => throw new ConflictException("invalid_entitlement_system", $"Unknown entitlement system '{system}'."),
             };
         }
 
         // Under System A the doctor's share comes out of drug profit, so the clinic keeps the rest;
-        // under System B / when disabled the doctor's fee is paid separately, so the clinic keeps all of it.
+        // under System B / when disabled the doctor's fee is paid separately, so the clinic keeps all
+        // of it. M24 — the settlement discount is money the clinic handed back to the farmer, so it
+        // leaves the clinic's slice of the pool either way (the doctor already bore their pct of it
+        // through the basis). Pie check: (drugProfit − discount) == doctorShare + clinicShare.
+        var discountAmount = settlement?.DiscountAmount ?? 0m;
         var clinicShare = system == EntitlementSystem.DrugProfit
-            ? drugProfit - amount.ComputedAmount
-            : drugProfit;
+            ? drugProfit - amount.ComputedAmount - discountAmount
+            : drugProfit - discountAmount;
 
         return new BatchEntitlementBreakdown(
             batchId,
@@ -131,7 +159,8 @@ public sealed class EntitlementService : IEntitlementService
             examFee,
             amount.ComputedAmount,
             amount.CeilingApplied,
-            clinicShare);
+            clinicShare,
+            SettlementDiscount: settlement?.DiscountAmount ?? 0m);
     }
 
     public async Task<DoctorEntitlement?> ComputeForVisitAsync(Guid visitId, CancellationToken cancellationToken)

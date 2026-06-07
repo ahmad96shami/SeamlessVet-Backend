@@ -24,4 +24,5 @@ public sealed record ProfitPerBatchReportResponse(
     DateOnly AsOf,
     decimal DistributedToPartners,
     decimal RetainedByClinic,
-    IReadOnlyList<ProfitAllocation> PartnerAllocations);
+    IReadOnlyList<ProfitAllocation> PartnerAllocations,
+    decimal SettlementDiscount = 0m); // M24 — تصفية discount; already netted out of ClinicShare
