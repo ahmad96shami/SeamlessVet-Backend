@@ -321,6 +321,63 @@ public sealed class InvoicesIntegrationTests
         second.StatusCode.Should().Be(HttpStatusCode.Conflict, "a prescription can be billed once");
     }
 
+    [Fact]
+    public async Task BilledVisitCharges_CannotBeDeletedOrRepriced_OnTheVisit()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var (_, productId) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var serviceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = serviceId, nameAr = "فحص", category = "exam", defaultPrice = 40m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var procedureId = Guid.CreateVersion7();
+        (await PostAsync(client, "/procedures", new { id = procedureId, visitId, serviceId, price = 40m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var prescriptionId = Guid.CreateVersion7();
+        (await PostAsync(client, "/prescriptions", new { id = prescriptionId, visitId, productId, dispenseType = "dispensed_to_owner", quantity = 1m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"guard-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Billed → the clinical rows backing the invoice lines are frozen.
+        var rxDelete = await SendAsync(client, HttpMethod.Delete, $"/prescriptions/{prescriptionId}", null);
+        rxDelete.StatusCode.Should().Be(HttpStatusCode.Conflict, "a billed prescription cannot be removed from the visit");
+        (await rxDelete.Content.ReadAsStringAsync()).Should().Contain("prescription_billed");
+
+        var procDelete = await SendAsync(client, HttpMethod.Delete, $"/procedures/{procedureId}", null);
+        procDelete.StatusCode.Should().Be(HttpStatusCode.Conflict, "a billed procedure cannot be removed from the visit");
+        (await procDelete.Content.ReadAsStringAsync()).Should().Contain("procedure_billed");
+
+        var reprice = await SendAsync(client, HttpMethod.Patch, $"/procedures/{procedureId}", new { price = 99m });
+        reprice.StatusCode.Should().Be(HttpStatusCode.Conflict, "a billed procedure cannot be re-priced");
+        (await reprice.Content.ReadAsStringAsync()).Should().Contain("procedure_billed");
+
+        // The clinical RESULT stays editable (round-tripping the unchanged price must not trip the guard).
+        (await SendAsync(client, HttpMethod.Patch, $"/procedures/{procedureId}", new { price = 40m, resultText = "نتيجة" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Unbilled rows still delete freely.
+        var freeRx = Guid.CreateVersion7();
+        (await PostAsync(client, "/prescriptions", new { id = freeRx, visitId, productId, dispenseType = "dispensed_to_owner", quantity = 1m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await SendAsync(client, HttpMethod.Delete, $"/prescriptions/{freeRx}", null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent, "an unbilled prescription is still the vet's to remove");
+    }
+
     // ---- helpers ----
 
     private static HttpClient AuthedClient(VetApiFactory factory, User admin)
@@ -333,8 +390,12 @@ public sealed class InvoicesIntegrationTests
     }
 
     private static async Task<HttpResponseMessage> PostAsync(HttpClient client, string path, object? body, string? idemKey = null)
+        => await SendAsync(client, HttpMethod.Post, path, body, idemKey);
+
+    private static async Task<HttpResponseMessage> SendAsync(
+        HttpClient client, HttpMethod method, string path, object? body, string? idemKey = null)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, path)
+        var request = new HttpRequestMessage(method, path)
         {
             Content = body is null ? null : JsonContent.Create(body),
         };

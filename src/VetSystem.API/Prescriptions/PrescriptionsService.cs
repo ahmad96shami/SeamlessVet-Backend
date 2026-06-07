@@ -1,5 +1,6 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Application.Inventory;
 using VetSystem.Application.Inventory.Contracts;
@@ -190,14 +191,17 @@ public sealed class PrescriptionsService
     }
 
     /// <summary>
-    /// Soft-deletes the prescription record. Inventory is append-only: a deduction already applied for
-    /// an <c>administered_in_clinic</c> item is not auto-reversed — post a <c>return_add</c> movement to
-    /// correct stock.
+    /// Soft-deletes the prescription record — refused once an invoice line bills it
+    /// (<see cref="BilledChargeGuard"/>): the clinical row backs the issued invoice. Inventory is
+    /// append-only: a deduction already applied for an <c>administered_in_clinic</c> item is not
+    /// auto-reversed — post a <c>return_add</c> movement to correct stock.
     /// </summary>
     public async Task DeleteAsync(Guid id, CancellationToken cancellationToken)
     {
         var rx = await _db.Prescriptions.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                  ?? throw new NotFoundException("prescription", id);
+
+        await BilledChargeGuard.EnsurePrescriptionNotBilledAsync(_db, id, cancellationToken);
 
         _db.Prescriptions.Remove(rx);
         await _db.SaveChangesAsync(cancellationToken);

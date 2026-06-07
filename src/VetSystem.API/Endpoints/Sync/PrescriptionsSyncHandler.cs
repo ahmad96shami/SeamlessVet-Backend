@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -112,6 +113,9 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
         RequireAuthenticated();
         var prescription = await _db.Prescriptions.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                            ?? throw new NotFoundException(TableName, id);
+
+        // Mirror the REST rule (BilledChargeGuard): a billed prescription backs an invoice line.
+        await BilledChargeGuard.EnsurePrescriptionNotBilledAsync(_db, id, cancellationToken);
 
         _db.Prescriptions.Remove(prescription);
         await _db.SaveChangesAsync(cancellationToken);

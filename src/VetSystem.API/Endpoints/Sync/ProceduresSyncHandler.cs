@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -61,6 +62,19 @@ public sealed class ProceduresSyncHandler : ISyncTableHandler
         var procedure = await _db.Procedures.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                         ?? throw new NotFoundException(TableName, id);
 
+        // Mirror the REST rule (BilledChargeGuard): once an invoice line bills this procedure, its
+        // money/identity fields are frozen — change-detected so result-only patches still apply.
+        var incomingServiceId = body.TryGetProperty("service_id", out _)
+            ? SyncBody.OptionalGuid(body, "service_id")
+            : procedure.ServiceId;
+        var incomingPrice = body.TryGetProperty("price", out _)
+            ? SyncBody.OptionalDecimal(body, "price") ?? 0m
+            : procedure.Price;
+        if (incomingServiceId != procedure.ServiceId || incomingPrice != procedure.Price)
+        {
+            await BilledChargeGuard.EnsureProcedureNotBilledAsync(_db, id, cancellationToken);
+        }
+
         if (body.TryGetProperty("service_id", out _))
         {
             var serviceId = SyncBody.OptionalGuid(body, "service_id");
@@ -84,6 +98,8 @@ public sealed class ProceduresSyncHandler : ISyncTableHandler
         RequireAuthenticated();
         var procedure = await _db.Procedures.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                         ?? throw new NotFoundException(TableName, id);
+
+        await BilledChargeGuard.EnsureProcedureNotBilledAsync(_db, id, cancellationToken);
 
         _db.Procedures.Remove(procedure);
         await _db.SaveChangesAsync(cancellationToken);

@@ -1,5 +1,6 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Application.Procedures.Contracts;
 using VetSystem.Domain.Common;
@@ -87,6 +88,16 @@ public sealed class ProceduresService
         var procedure = await _db.Procedures.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                         ?? throw new NotFoundException("procedure", id);
 
+        // Once billed, the money/identity fields are frozen (BilledChargeGuard) — the issued
+        // invoice line snapshots them. Change-detected (not presence-detected) so a form that
+        // round-trips the unchanged price can still edit the clinical result text.
+        var changesService = request.ServiceId is { } sid && sid != procedure.ServiceId;
+        var changesPrice = request.Price.HasValue && request.Price.Value != procedure.Price;
+        if (changesService || changesPrice)
+        {
+            await BilledChargeGuard.EnsureProcedureNotBilledAsync(_db, id, cancellationToken);
+        }
+
         if (request.ServiceId is { } serviceId)
         {
             await RequireServiceAsync(serviceId, cancellationToken);
@@ -105,6 +116,8 @@ public sealed class ProceduresService
     {
         var procedure = await _db.Procedures.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                         ?? throw new NotFoundException("procedure", id);
+
+        await BilledChargeGuard.EnsureProcedureNotBilledAsync(_db, id, cancellationToken);
 
         _db.Procedures.Remove(procedure);
         await _db.SaveChangesAsync(cancellationToken);
