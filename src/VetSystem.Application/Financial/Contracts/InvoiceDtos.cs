@@ -8,10 +8,11 @@ namespace VetSystem.Application.Financial.Contracts;
 /// time (SCHEMA "Key invariants" #8).
 /// <para>
 /// A line may back-link one of the request visit's charges via <c>PrescriptionId</c> (with the
-/// matching <c>ProductId</c>) or <c>ProcedureId</c> (with the matching <c>ServiceId</c>) so the POS
-/// can present visit charges as editable cart lines (price/discount). The server then resolves the
-/// line from the clinical record — <b>quantity is server-authoritative</b> (the prescription's /
-/// 1 for a procedure; the client value is ignored) — and skips that charge during auto-assembly.
+/// matching <c>ProductId</c>), <c>ProcedureId</c>, or <c>VaccinationId</c> (each with the matching
+/// <c>ServiceId</c>) so the POS can present visit charges as editable cart lines (price/discount).
+/// The server then resolves the line from the clinical record — <b>quantity is
+/// server-authoritative</b> (the prescription's / 1 for a procedure or vaccination; the client
+/// value is ignored) — and skips that charge during auto-assembly.
 /// </para>
 /// </summary>
 public sealed record InvoiceLineRequest(
@@ -22,7 +23,8 @@ public sealed record InvoiceLineRequest(
     decimal? UnitPrice,
     decimal DiscountAmount = 0m,
     Guid? PrescriptionId = null,
-    Guid? ProcedureId = null);
+    Guid? ProcedureId = null,
+    Guid? VaccinationId = null);
 
 /// <summary>
 /// A payment leg. Several may be sent for a mixed payment (PRD §5.4). M19: a <c>cheque</c> leg may
@@ -91,7 +93,8 @@ public sealed record InvoiceItemResponse(
     decimal DiscountAmount,
     decimal LineTotal,
     Guid? PrescriptionId,
-    Guid? ProcedureId);
+    Guid? ProcedureId,
+    Guid? VaccinationId);
 
 public sealed record PaymentResponse(
     Guid Id,

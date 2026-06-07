@@ -387,8 +387,11 @@ public sealed class InvoicesService
                 .Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToHashSet();
             var explicitProcedures = requestItems
                 .Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToHashSet();
+            var explicitVaccinations = requestItems
+                .Where(i => i.VaccinationId is not null).Select(i => i.VaccinationId!.Value).ToHashSet();
             lines.AddRange(await AssembleVisitLinesAsync(
-                visit, customerId, pricingAsOf, applyContractPricing, explicitRx, explicitProcedures, cancellationToken));
+                visit, customerId, pricingAsOf, applyContractPricing, explicitRx, explicitProcedures,
+                explicitVaccinations, cancellationToken));
         }
 
         if (lines.Count == 0)
@@ -461,6 +464,7 @@ public sealed class InvoicesService
                 LineTotal = line.LineTotal,
                 PrescriptionId = line.PrescriptionId,
                 ProcedureId = line.ProcedureId,
+                VaccinationId = line.VaccinationId,
             });
         }
 
@@ -575,6 +579,7 @@ public sealed class InvoicesService
     {
         var quantity = item.Quantity;
         decimal? procedurePrice = null;
+        decimal? vaccinationPrice = null;
 
         // Back-linked visit charges (the POS presents them as locked-quantity cart lines so the
         // cashier can adjust price/discount): the clinical record stays authoritative for WHAT is
@@ -648,6 +653,39 @@ public sealed class InvoicesService
             quantity = 1m;                    // a procedure always bills as a single line
             procedurePrice = procedure.Price; // the visit-set price, unless the request overrides it
         }
+        else if (item.VaccinationId is { } vaccinationId)
+        {
+            // M22 — mirrors the procedure branch: only catalog-linked vaccinations are billable.
+            if (visit is null)
+            {
+                throw new ConflictException("line_backlink_requires_visit",
+                    "A vaccination-linked line requires the invoice to be linked to its visit.");
+            }
+
+            var vaccination = await _db.Vaccinations.AsNoTracking()
+                                  .FirstOrDefaultAsync(v => v.Id == vaccinationId, cancellationToken)
+                              ?? throw new NotFoundException("vaccination", vaccinationId);
+            if (vaccination.VisitId != visit.Id)
+            {
+                throw new ConflictException("vaccination_not_in_visit",
+                    $"Vaccination '{vaccinationId}' does not belong to visit '{visit.Id}'.");
+            }
+
+            if (vaccination.ServiceId is null || vaccination.ServiceId != item.ServiceId)
+            {
+                throw new ConflictException("vaccination_service_mismatch",
+                    "The line's service_id must match the vaccination's catalog vaccine.");
+            }
+
+            if (await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.VaccinationId == vaccinationId, cancellationToken))
+            {
+                throw new ConflictException("vaccination_already_billed",
+                    $"Vaccination '{vaccinationId}' is already billed on an invoice.");
+            }
+
+            quantity = 1m;                        // a vaccination always bills as a single line
+            vaccinationPrice = vaccination.Price; // the recording-time snapshot, unless the request overrides it
+        }
 
         decimal unitPrice;
         decimal costPrice;
@@ -669,7 +707,7 @@ public sealed class InvoicesService
             var serviceId = item.ServiceId!.Value;
             var service = await _db.Services.AsNoTracking().FirstOrDefaultAsync(s => s.Id == serviceId, cancellationToken)
                           ?? throw new NotFoundException("service", serviceId);
-            unitPrice = item.UnitPrice ?? procedurePrice ?? service.DefaultPrice;
+            unitPrice = item.UnitPrice ?? procedurePrice ?? vaccinationPrice ?? service.DefaultPrice;
             costPrice = 0m;
             description ??= service.NameAr;
         }
@@ -683,16 +721,16 @@ public sealed class InvoicesService
 
         return new ResolvedLine(
             item.ProductId, item.ServiceId, description, quantity, unitPrice, costPrice,
-            Money(item.DiscountAmount), lineTotal, item.PrescriptionId, item.ProcedureId);
+            Money(item.DiscountAmount), lineTotal, item.PrescriptionId, item.ProcedureId, item.VaccinationId);
     }
 
     /// <summary>
     /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c>
-    /// prescription and every billable procedure that no existing invoice line already references —
-    /// minus any the request already billed as explicit back-linked lines (the POS cart's editable
-    /// visit lines). On field invoices, dispensed-med lines bill at the contract-overridden price
-    /// when one applies (M8 task 10); procedures (services) are never contract-overridden and use
-    /// the procedure price.
+    /// prescription, every billable procedure, and every catalog-linked vaccination (M22) that no
+    /// existing invoice line already references — minus any the request already billed as explicit
+    /// back-linked lines (the POS cart's editable visit lines). On field invoices, dispensed-med
+    /// lines bill at the contract-overridden price when one applies (M8 task 10); procedures and
+    /// vaccinations (services) are never contract-overridden and use the visit-set price snapshot.
     /// </summary>
     private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(
         Visit visit,
@@ -701,6 +739,7 @@ public sealed class InvoicesService
         bool applyContractPricing,
         IReadOnlySet<Guid> excludePrescriptionIds,
         IReadOnlySet<Guid> excludeProcedureIds,
+        IReadOnlySet<Guid> excludeVaccinationIds,
         CancellationToken cancellationToken)
     {
         var lines = new List<ResolvedLine>();
@@ -744,7 +783,8 @@ public sealed class InvoicesService
                     DiscountAmount: 0m,
                     LineTotal: Money(quantity * unitPrice),
                     PrescriptionId: rx.Id,
-                    ProcedureId: null));
+                    ProcedureId: null,
+                    VaccinationId: null));
             }
         }
 
@@ -774,7 +814,49 @@ public sealed class InvoicesService
                     DiscountAmount: 0m,
                     LineTotal: Money(procedure.Price),
                     PrescriptionId: null,
-                    ProcedureId: procedure.Id));
+                    ProcedureId: procedure.Id,
+                    VaccinationId: null));
+            }
+        }
+
+        // M22 — catalog-linked vaccinations bill exactly like procedures: one service line at the
+        // recording-time price snapshot (catalog default when the snapshot is missing). Legacy
+        // free-text vaccinations (service_id IS NULL) are clinical records only and never bill.
+        var vaccinations = await _db.Vaccinations.AsNoTracking()
+            .Where(v => v.VisitId == visit.Id && v.ServiceId != null)
+            .ToListAsync(cancellationToken);
+
+        if (vaccinations.Count > 0)
+        {
+            var vaxIds = vaccinations.Select(v => v.Id).ToList();
+            var billedVax = await _db.InvoiceItems.AsNoTracking()
+                .Where(it => it.VaccinationId != null && vaxIds.Contains(it.VaccinationId!.Value))
+                .Select(it => it.VaccinationId!.Value)
+                .ToListAsync(cancellationToken);
+            var billedVaxSet = billedVax.ToHashSet();
+            billedVaxSet.UnionWith(excludeVaccinationIds);
+
+            var serviceIds = vaccinations.Select(v => v.ServiceId!.Value).Distinct().ToList();
+            var defaultPrices = await _db.Services.AsNoTracking()
+                .Where(s => serviceIds.Contains(s.Id))
+                .ToDictionaryAsync(s => s.Id, s => s.DefaultPrice, cancellationToken);
+
+            foreach (var vaccination in vaccinations.Where(v => !billedVaxSet.Contains(v.Id)))
+            {
+                var unitPrice = vaccination.Price
+                                ?? defaultPrices.GetValueOrDefault(vaccination.ServiceId!.Value);
+                lines.Add(new ResolvedLine(
+                    ProductId: null,
+                    ServiceId: vaccination.ServiceId,
+                    Description: vaccination.VaccineType,
+                    Quantity: 1m,
+                    UnitPrice: unitPrice,
+                    CostPrice: 0m,
+                    DiscountAmount: 0m,
+                    LineTotal: Money(unitPrice),
+                    PrescriptionId: null,
+                    ProcedureId: null,
+                    VaccinationId: vaccination.Id));
             }
         }
 
@@ -928,5 +1010,6 @@ public sealed class InvoicesService
         decimal DiscountAmount,
         decimal LineTotal,
         Guid? PrescriptionId,
-        Guid? ProcedureId);
+        Guid? ProcedureId,
+        Guid? VaccinationId);
 }

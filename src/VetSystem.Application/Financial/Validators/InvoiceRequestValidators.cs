@@ -21,10 +21,10 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
         RuleFor(l => l.DiscountAmount).GreaterThanOrEqualTo(0m);
 
         // Visit-charge back-links: at most one, and it must agree with the line's catalog target
-        // (a prescription dispenses a product; a procedure performs a service).
+        // (a prescription dispenses a product; a procedure / vaccination performs a service).
         RuleFor(l => l)
-            .Must(l => l.PrescriptionId is null || l.ProcedureId is null)
-            .WithMessage("A line may back-link a prescription or a procedure, not both.");
+            .Must(l => new[] { l.PrescriptionId, l.ProcedureId, l.VaccinationId }.Count(b => b is not null) <= 1)
+            .WithMessage("A line may back-link a prescription, a procedure, or a vaccination — at most one.");
         RuleFor(l => l.ProductId)
             .NotNull()
             .When(l => l.PrescriptionId is not null)
@@ -33,18 +33,26 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
             .NotNull()
             .When(l => l.ProcedureId is not null)
             .WithMessage("A procedure-linked line must reference the procedure's service_id.");
+        RuleFor(l => l.ServiceId)
+            .NotNull()
+            .When(l => l.VaccinationId is not null)
+            .WithMessage("A vaccination-linked line must reference the vaccination's service_id.");
     }
 }
 
 internal static class InvoiceLineRules
 {
-    /// <summary>No two lines may bill the same prescription / procedure (the already-billed check
-    /// in the service only sees committed invoices, not sibling lines of this request).</summary>
+    /// <summary>No two lines may bill the same prescription / procedure / vaccination (the
+    /// already-billed check in the service only sees committed invoices, not sibling lines of this
+    /// request).</summary>
     public static bool BackLinksAreDistinct(IReadOnlyList<InvoiceLineRequest> items)
     {
         var rx = items.Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToList();
         var procedures = items.Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToList();
-        return rx.Distinct().Count() == rx.Count && procedures.Distinct().Count() == procedures.Count;
+        var vaccinations = items.Where(i => i.VaccinationId is not null).Select(i => i.VaccinationId!.Value).ToList();
+        return rx.Distinct().Count() == rx.Count
+               && procedures.Distinct().Count() == procedures.Count
+               && vaccinations.Distinct().Count() == vaccinations.Count;
     }
 }
 
