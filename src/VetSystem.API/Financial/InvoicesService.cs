@@ -132,6 +132,8 @@ public sealed class InvoicesService
         var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
                     ?? throw new NotFoundException("visit", visitId);
 
+        await RequireBatchNotSettledAsync(visit.BatchId, cancellationToken);
+
         var settings = await _db.SystemSettings.AsNoTracking()
             .FirstOrDefaultAsync(s => s.EnvironmentId == envId, cancellationToken);
         var fee = Money(request.Amount ?? visit.ExamFeeApplied ?? settings?.DefaultExamFee ?? 0m);
@@ -234,6 +236,10 @@ public sealed class InvoicesService
         {
             return await BuildResponseAsync(already, cancellationToken);
         }
+
+        // M24 invariant #11 — the settlement's snapshots and ledger adjustments are computed over the
+        // batch's effective invoices; voiding one afterwards would silently invalidate them.
+        await RequireBatchNotSettledAsync(original.BatchId, cancellationToken);
 
         var voidInvoice = new Invoice
         {
@@ -355,6 +361,8 @@ public sealed class InvoicesService
         {
             return await BuildResponseAsync(existing, cancellationToken);
         }
+
+        await RequireBatchNotSettledAsync(batchId, cancellationToken);
 
         if (customerId is { } cid)
         {
@@ -591,6 +599,23 @@ public sealed class InvoicesService
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// M24 invariant #11 — a settled batch is frozen: its settlement snapshotted the effective
+    /// invoices and posted the re-pricing/discount adjustments, so issuing or voiding invoices under
+    /// that batch afterwards would silently desync the settlement, the ledger, and the entitlement.
+    /// Guards the REST issuance/void cores here; the device write path has the same check in
+    /// <c>InvoicesSyncHandler</c> / <c>InvoiceItemsSyncHandler</c> (they write directly).
+    /// </summary>
+    private async Task RequireBatchNotSettledAsync(Guid? batchId, CancellationToken cancellationToken)
+    {
+        if (batchId is { } bid
+            && await _db.BatchSettlements.AsNoTracking().AnyAsync(s => s.BatchId == bid, cancellationToken))
+        {
+            throw new ConflictException("batch_settled",
+                "The batch has been settled (تصفية) — its invoices are frozen. Correct via a manual ledger adjustment.");
+        }
     }
 
     private async Task PostInvoiceLedgerEntryAsync(Invoice invoice, decimal amount, CancellationToken cancellationToken)

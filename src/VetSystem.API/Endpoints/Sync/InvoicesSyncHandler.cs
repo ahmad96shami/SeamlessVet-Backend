@@ -53,6 +53,15 @@ public sealed class InvoicesSyncHandler : ISyncTableHandler
             throw new ConflictException("invoice_already_exists", $"Invoice '{id}' already exists; invoices are append-only.");
         }
 
+        // M24 invariant #11 — a settled batch is frozen. An offline-created invoice arriving after
+        // the تصفية cannot be priced into it; surface a conflict so staff resolves the money manually.
+        if (SyncBody.OptionalGuid(body, "batch_id") is { } syncBatchId
+            && await _db.BatchSettlements.AsNoTracking().AnyAsync(s => s.BatchId == syncBatchId, cancellationToken))
+        {
+            throw new ConflictException("batch_settled",
+                "The batch has been settled (تصفية) — its invoices are frozen. Correct via a manual ledger adjustment.");
+        }
+
         var customerId = SyncBody.OptionalGuid(body, "customer_id");
         if (customerId is { } cid)
         {

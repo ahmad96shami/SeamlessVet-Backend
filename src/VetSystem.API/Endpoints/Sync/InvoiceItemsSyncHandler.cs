@@ -40,7 +40,21 @@ public sealed class InvoiceItemsSyncHandler : ISyncTableHandler
         }
 
         var invoiceId = SyncBody.RequireGuid(body, "invoice_id");
-        await EnsureExistsAsync(_db.Invoices.AnyAsync(i => i.Id == invoiceId, cancellationToken), "invoice", invoiceId);
+        var invoiceBatchId = await _db.Invoices.AsNoTracking()
+            .Where(i => i.Id == invoiceId)
+            .Select(i => new { i.BatchId })
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new NotFoundException("invoice", invoiceId);
+
+        // M24 invariant #11 — a line landing after the batch's تصفية could never be priced into the
+        // settlement (its snapshots/adjustments are already posted), so it is rejected, not silently
+        // skewed. Covers the partial-queue window where the header synced before settlement.
+        if (invoiceBatchId.BatchId is { } itemBatchId
+            && await _db.BatchSettlements.AsNoTracking().AnyAsync(s => s.BatchId == itemBatchId, cancellationToken))
+        {
+            throw new ConflictException("batch_settled",
+                "The batch has been settled (تصفية) — its invoices are frozen. Correct via a manual ledger adjustment.");
+        }
 
         var productId = SyncBody.OptionalGuid(body, "product_id");
         var serviceId = SyncBody.OptionalGuid(body, "service_id");
