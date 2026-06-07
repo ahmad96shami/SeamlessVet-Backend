@@ -1,6 +1,7 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.API.Financial;
+using VetSystem.API.NightStays;
 using VetSystem.Application.Common;
 using VetSystem.Application.Ledgers;
 using VetSystem.Application.Ledgers.Contracts;
@@ -31,6 +32,7 @@ public sealed class VisitsService
     private readonly IVisitNumberGenerator _visitNumberGen;
     private readonly ILedgerService _ledgers;
     private readonly IOwnerLedgerResolver _ownerLedger;
+    private readonly NightStaysService _nightStays;
 
     public VisitsService(
         ApplicationDbContext db,
@@ -40,7 +42,8 @@ public sealed class VisitsService
         IVisitNumberValidator visitNumbers,
         IVisitNumberGenerator visitNumberGen,
         ILedgerService ledgers,
-        IOwnerLedgerResolver ownerLedger)
+        IOwnerLedgerResolver ownerLedger,
+        NightStaysService nightStays)
     {
         _db = db;
         _currentUser = currentUser;
@@ -50,6 +53,7 @@ public sealed class VisitsService
         _visitNumberGen = visitNumberGen;
         _ledgers = ledgers;
         _ownerLedger = ownerLedger;
+        _nightStays = nightStays;
     }
 
     public async Task<IReadOnlyList<VisitResponse>> ListAsync(
@@ -263,24 +267,44 @@ public sealed class VisitsService
                 $"Cannot transition a visit from '{visit.Status}' to '{target}'.");
         }
 
+        // M23 — the fee is chargeable only if the exam actually started (بدء الكشف); a visit
+        // completed straight from open never confirmed it. Captured before the overwrite below.
+        var wasStarted = visit.Status == VisitStatus.InProgress;
+
         visit.Status = target;
         visit.EndedAt = _clock.UtcNow;
 
-        // M17 — completing an in-clinic visit posts its checkup fee (رسوم الكشف) to the owner ledger
-        // (M16 routing). A waived follow-up (fee 0) or a cancellation posts nothing.
-        var postCheckup = target == VisitStatus.Completed
-                          && visit.VisitType == VisitType.InClinic
-                          && visit.CheckupFeeApplied is > 0m;
-
-        if (!postCheckup)
+        if (target != VisitStatus.Completed)
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            await _db.SaveChangesAsync(cancellationToken); // cancellation bills nothing
             return _mapper.Map<VisitResponse>(visit);
         }
 
+        // M23 completion backstop — post whatever the invoice rail never billed: the checkup fee
+        // and the visit's night stays (auto-closing open ones). The visit-row lock serializes this
+        // against a concurrent POS issuance (which locks the same row): the two writers use
+        // DIFFERENT idempotency stores (invoice back-links vs checkup-/night-stay- ledger keys),
+        // so without the lock both could pass their exclusion checks and double-charge
+        // (SCHEMA invariant #10).
         await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+        await _db.Database.ExecuteSqlAsync($"SELECT id FROM visits WHERE id = {visit.Id} FOR UPDATE", cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-        await PostCheckupFeeAsync(visit, cancellationToken);
+
+        var postCheckup = visit.VisitType == VisitType.InClinic
+                          && wasStarted
+                          && visit.CheckupFeeApplied is > 0m
+                          && !await _db.InvoiceItems.AsNoTracking()
+                              .AnyAsync(it => it.CheckupFeeVisitId == visit.Id, cancellationToken);
+        if (postCheckup)
+        {
+            await PostCheckupFeeAsync(visit, cancellationToken); // checkup-{visitId} absorbs replays
+        }
+
+        if (visit.VisitType == VisitType.InClinic)
+        {
+            await _nightStays.CloseAndPostUnbilledForVisitAsync(visit, cancellationToken);
+        }
+
         await tx.CommitAsync(cancellationToken);
         return _mapper.Map<VisitResponse>(visit);
     }

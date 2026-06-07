@@ -448,6 +448,33 @@ public sealed class InvoicesService
 
         await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
 
+        // M23 — a visit's care charges (checkup fee / night stays) have a SECOND billing writer:
+        // the completion backstop, which posts to the ledger under its own keys. Both writers lock
+        // the visit row and re-check the other store inside their transaction; without this, a
+        // concurrent complete + issue could each pass its (pre-transaction) exclusion check and
+        // double-charge (SCHEMA invariant #10). The resolution phase above ran unlocked, so the
+        // re-check here is what actually decides.
+        var careChargeLines = lines.Where(l => l.NightStayId is not null || l.CheckupFeeVisitId is not null).ToList();
+        if (visit is not null && careChargeLines.Count > 0)
+        {
+            await _db.Database.ExecuteSqlAsync($"SELECT id FROM visits WHERE id = {visit.Id} FOR UPDATE", cancellationToken);
+
+            foreach (var line in careChargeLines)
+            {
+                var key = line.NightStayId is { } stayId ? $"night-stay-{stayId}" : $"checkup-{visit.Id}";
+                var concurrentlyBilled =
+                    await _db.LedgerEntries.AsNoTracking().AnyAsync(e => e.IdempotencyKey == key, cancellationToken)
+                    || (line.NightStayId is { } sid
+                        ? await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.NightStayId == sid, cancellationToken)
+                        : await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.CheckupFeeVisitId == visit.Id, cancellationToken));
+                if (concurrentlyBilled)
+                {
+                    throw new ConflictException("care_charge_concurrently_billed",
+                        "A checkup-fee / night-stay charge on this invoice was just billed elsewhere (visit completion or another till); reload the visit and retry.");
+                }
+            }
+        }
+
         _db.Invoices.Add(invoice);
         await _db.SaveChangesAsync(cancellationToken); // assigns invoice.Id
 
