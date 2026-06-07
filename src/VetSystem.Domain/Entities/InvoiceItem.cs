@@ -6,10 +6,11 @@ namespace VetSystem.Domain.Entities;
 /// SCHEMA §8 — one invoice line, referencing a product <b>or</b> a service (typed pair + CHECK).
 /// <see cref="CostPrice"/> is snapshotted from <c>products.purchase_price</c> at sale time and never
 /// recomputed (SCHEMA "Key invariants" #8); it feeds the M9 batch drug-profit calc. The optional
-/// <see cref="PrescriptionId"/> / <see cref="ProcedureId"/> / <see cref="VaccinationId"/> back-links
-/// record that this line bills a specific <c>dispensed_to_owner</c> prescription, a visit procedure,
-/// or a catalog-linked vaccination, so the issuance assembler (M7 task 8) never bills the same
-/// source twice.
+/// <see cref="PrescriptionId"/> / <see cref="ProcedureId"/> / <see cref="VaccinationId"/> /
+/// <see cref="NightStayId"/> / <see cref="CheckupFeeVisitId"/> back-links record that this line
+/// bills a specific visit charge — a billable prescription, a procedure, a catalog-linked
+/// vaccination, a night stay (M23), or the visit's checkup fee (M23) — so the issuance assembler
+/// (M7 task 8) never bills the same source twice.
 /// </summary>
 public sealed class InvoiceItem : Entity
 {
@@ -40,4 +41,10 @@ public sealed class InvoiceItem : Entity
 
     /// <summary>Set when this line bills a catalog-linked visit vaccination (auto-assembled at issuance).</summary>
     public Guid? VaccinationId { get; set; }
+
+    /// <summary>Set when this line bills a closed night stay (M23 — quantity = nights, price = rate).</summary>
+    public Guid? NightStayId { get; set; }
+
+    /// <summary>Set when this line bills the visit's in-clinic checkup fee (M23 — at most one per visit).</summary>
+    public Guid? CheckupFeeVisitId { get; set; }
 }

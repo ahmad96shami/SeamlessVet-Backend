@@ -23,6 +23,8 @@ internal sealed class InvoiceItemConfiguration : IEntityTypeConfiguration<Invoic
         builder.Property(i => i.PrescriptionId).HasColumnName("prescription_id");
         builder.Property(i => i.ProcedureId).HasColumnName("procedure_id");
         builder.Property(i => i.VaccinationId).HasColumnName("vaccination_id");
+        builder.Property(i => i.NightStayId).HasColumnName("night_stay_id");
+        builder.Property(i => i.CheckupFeeVisitId).HasColumnName("checkup_fee_visit_id");
 
         // SCHEMA §8 — a line targets exactly one of product / service.
         builder.ToTable(t => t.HasCheckConstraint(
@@ -68,6 +70,18 @@ internal sealed class InvoiceItemConfiguration : IEntityTypeConfiguration<Invoic
         builder.HasOne<Vaccination>()
             .WithMany()
             .HasForeignKey(i => i.VaccinationId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<NightStay>()
+            .WithMany()
+            .HasForeignKey(i => i.NightStayId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M23 — back-link for the visit's checkup-fee line; deliberately separate from the
+        // denormalized VisitId shadow column above (that one scopes sync, this one marks billing).
+        builder.HasOne<Visit>()
+            .WithMany()
+            .HasForeignKey(i => i.CheckupFeeVisitId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

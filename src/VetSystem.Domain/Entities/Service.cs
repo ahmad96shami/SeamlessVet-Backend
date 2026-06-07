@@ -17,3 +17,17 @@ public sealed class Service : Entity
 
     public decimal DefaultPrice { get; set; }
 }
+
+/// <summary>
+/// Well-known <see cref="Service.Category"/> values the server itself depends on. Vaccination is
+/// the M22 vaccine-catalog convention (admin-managed rows); checkup / night-stay are the M23
+/// <b>system services</b> — find-or-created per environment at issuance so checkup-fee and
+/// night-stay invoice lines satisfy the product-XOR-service CHECK on <c>invoice_items</c>.
+/// At most one service per environment may carry a system category (partial unique index).
+/// </summary>
+public static class ServiceCategories
+{
+    public const string Vaccination = "vaccination";
+    public const string Checkup = "checkup";
+    public const string NightStay = "night_stay";
+}

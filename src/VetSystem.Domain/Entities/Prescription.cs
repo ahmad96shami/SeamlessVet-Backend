@@ -34,6 +34,14 @@ public sealed class Prescription : Entity
 
     public decimal? Quantity { get; set; }
 
+    /// <summary>
+    /// M23 — when true, an <c>administered_in_clinic</c> prescription is charged to the customer:
+    /// it assembles into the visit's POS invoice like a dispensed one (stock was already deducted
+    /// at recording, so issuance skips the deduction). Meaningless for <c>dispensed_to_owner</c>
+    /// rows, which always bill. Defaults to false (current behavior: in-clinic meds absorbed).
+    /// </summary>
+    public bool Billable { get; set; }
+
     /// <summary>M18 — when true, <c>MedicationDueJob</c> emits recurring dose reminders for this row.</summary>
     public bool ReminderEnabled { get; set; }
 

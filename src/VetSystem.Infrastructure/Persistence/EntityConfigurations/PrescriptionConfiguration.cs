@@ -20,6 +20,9 @@ internal sealed class PrescriptionConfiguration : IEntityTypeConfiguration<Presc
         builder.Property(p => p.DispenseType).HasColumnName("dispense_type").IsRequired().HasMaxLength(24);
         builder.Property(p => p.Quantity).HasColumnName("quantity").HasColumnType("numeric(14,3)");
 
+        // M23 — administered_in_clinic meds charged to the customer (assemble into the visit's invoice).
+        builder.Property(p => p.Billable).HasColumnName("billable").IsRequired().HasDefaultValue(false);
+
         // M18 — recurring-dose reminder schedule (only meaningful when reminder_enabled).
         builder.Property(p => p.ReminderEnabled).HasColumnName("reminder_enabled").IsRequired().HasDefaultValue(false);
         builder.Property(p => p.IntervalMinutes).HasColumnName("interval_minutes");
