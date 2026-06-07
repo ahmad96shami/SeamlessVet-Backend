@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Reports;
 using VetSystem.Application.Reports.Contracts;
 using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Reports;
@@ -27,7 +28,7 @@ public sealed class ProfitAndLossReportService
 
         var invoices = await _db.Invoices.AsNoTracking()
             .Where(i => i.IssuedAt >= start && i.IssuedAt < end)
-            .Select(i => new { i.Id, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
+            .Select(i => new { i.Id, i.BatchId, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
             .ToListAsync(cancellationToken);
 
         var voidedOriginalIds = invoices
@@ -42,6 +43,16 @@ public sealed class ProfitAndLossReportService
         var taxCollected = effective.Sum(i => i.TaxAmount);
         var effectiveIds = effective.Select(i => i.Id).ToList();
 
+        // M24 — same settlement overlay as clinic-profits (the two must reconcile): per-line
+        // repricing deltas retroactively, batch discounts at settled_at.
+        var invoiceDeltas = await SettledPriceOverlay.LoadInvoiceDeltasAsync(
+            _db,
+            effective.Where(i => i.BatchId is not null).Select(i => (i.Id, i.BatchId!.Value)).ToList(),
+            cancellationToken);
+        var settlementDiscounts = await SettledPriceOverlay.SumDiscountsSettledInWindowAsync(
+            _db, start, end, cancellationToken);
+        revenue += invoiceDeltas.Values.Sum() - settlementDiscounts;
+
         var cogs = effectiveIds.Count == 0
             ? 0m
             : await _db.InvoiceItems.AsNoTracking()
@@ -52,6 +63,8 @@ public sealed class ProfitAndLossReportService
             .Where(e => e.CreatedAt >= start && e.CreatedAt < end)
             .SumAsync(e => (decimal?)e.ComputedAmount, cancellationToken) ?? 0m;
 
-        return new ProfitAndLossResponse(from, to, revenue, taxCollected, cogs, revenue - cogs, doctorShares);
+        return new ProfitAndLossResponse(
+            from, to, revenue, taxCollected, cogs, revenue - cogs, doctorShares,
+            SettlementDiscounts: settlementDiscounts);
     }
 }

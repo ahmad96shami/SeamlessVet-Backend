@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Reports;
 using VetSystem.Application.Reports.Contracts;
 using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Reports;
@@ -31,35 +32,62 @@ public sealed class PharmacyProfitReportService
 
         var invoices = await _db.Invoices.AsNoTracking()
             .Where(i => i.IssuedAt >= start && i.IssuedAt < end)
-            .Select(i => new { i.Id, i.Status, i.VoidOfInvoiceId })
+            .Select(i => new { i.Id, i.BatchId, i.Status, i.VoidOfInvoiceId })
             .ToListAsync(cancellationToken);
 
         var voidedOriginalIds = invoices
             .Where(i => i.VoidOfInvoiceId is not null)
             .Select(i => i.VoidOfInvoiceId!.Value)
             .ToHashSet();
-        var effectiveIds = invoices
+        var effective = invoices
             .Where(i => i.Status == InvoiceStatus.Issued && i.VoidOfInvoiceId is null && !voidedOriginalIds.Contains(i.Id))
-            .Select(i => i.Id)
             .ToList();
+        var effectiveIds = effective.Select(i => i.Id).ToList();
 
         if (effectiveIds.Count == 0)
         {
             return new PharmacyProfitReportResponse(from, to, 0m, 0m, 0m, 0, []);
         }
 
+        // M24 — a settled batch's product lines are worth their negotiated price, retroactively
+        // (invariant #11). The maps force the grouping in memory; cost stays the frozen snapshot.
+        var priceMaps = await SettledPriceOverlay.LoadPriceMapsAsync(
+            _db,
+            effective.Where(i => i.BatchId is not null).Select(i => i.BatchId!.Value).Distinct().ToList(),
+            cancellationToken);
+        var batchByInvoice = effective
+            .Where(i => i.BatchId is not null)
+            .ToDictionary(i => i.Id, i => i.BatchId!.Value);
+
         // Per-product totals over the product lines of the effective invoices.
-        var grouped = await _db.InvoiceItems.AsNoTracking()
+        var items = await _db.InvoiceItems.AsNoTracking()
             .Where(it => effectiveIds.Contains(it.InvoiceId) && it.ProductId != null)
-            .GroupBy(it => it.ProductId!.Value)
+            .Select(it => new
+            {
+                it.InvoiceId,
+                ProductId = it.ProductId!.Value,
+                it.Quantity,
+                it.DiscountAmount,
+                it.LineTotal,
+                it.CostPrice,
+            })
+            .ToListAsync(cancellationToken);
+
+        var grouped = items
+            .GroupBy(it => it.ProductId)
             .Select(g => new
             {
                 ProductId = g.Key,
                 Quantity = g.Sum(x => x.Quantity),
-                Revenue = g.Sum(x => x.LineTotal),
+                Revenue = g.Sum(x =>
+                    batchByInvoice.TryGetValue(x.InvoiceId, out var batchId)
+                    && priceMaps.TryGetValue(batchId, out var prices)
+                    && prices.TryGetValue(g.Key, out var settled)
+                        ? SettledPriceOverlay.OverlaidLineRevenue(settled, x.Quantity, x.DiscountAmount)
+                        : x.LineTotal),
                 Cost = g.Sum(x => x.CostPrice * x.Quantity),
             })
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         var totalRevenue = grouped.Sum(x => x.Revenue);
         var totalCost = grouped.Sum(x => x.Cost);

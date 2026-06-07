@@ -5,6 +5,7 @@ using VetSystem.Application.Reports;
 using VetSystem.Application.Reports.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Reports;
@@ -48,7 +49,7 @@ public sealed class ClinicProfitsReportService
         // Effective (non-void) invoices in the window: revenue (ex-tax) + the basis for COGS.
         var invoices = await _db.Invoices.AsNoTracking()
             .Where(i => i.IssuedAt >= start && i.IssuedAt < end)
-            .Select(i => new { i.Id, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
+            .Select(i => new { i.Id, i.BatchId, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
             .ToListAsync(cancellationToken);
 
         var voidedOriginalIds = invoices
@@ -61,6 +62,17 @@ public sealed class ClinicProfitsReportService
 
         var revenue = effective.Sum(i => i.Total - i.TaxAmount); // ex-tax net sales
         var effectiveIds = effective.Select(i => i.Id).ToList();
+
+        // M24 — settled batches (تصفية) supersede billed prices retroactively (like voids): add the
+        // per-line repricing deltas of settled-batch invoices, and net out the batch-level discounts
+        // granted in this window (attributed at settled_at — no per-invoice basis exists for them).
+        var invoiceDeltas = await SettledPriceOverlay.LoadInvoiceDeltasAsync(
+            _db,
+            effective.Where(i => i.BatchId is not null).Select(i => (i.Id, i.BatchId!.Value)).ToList(),
+            cancellationToken);
+        var settlementDiscounts = await SettledPriceOverlay.SumDiscountsSettledInWindowAsync(
+            _db, start, end, cancellationToken);
+        revenue += invoiceDeltas.Values.Sum() - settlementDiscounts;
 
         var cogs = effectiveIds.Count == 0
             ? 0m
@@ -87,6 +99,7 @@ public sealed class ClinicProfitsReportService
             DoctorShares: doctorShares,
             DistributedToPartners: split.DistributedTotal,
             RetainedByClinic: split.Retained,
-            PartnerAllocations: split.Allocations);
+            PartnerAllocations: split.Allocations,
+            SettlementDiscounts: settlementDiscounts);
     }
 }

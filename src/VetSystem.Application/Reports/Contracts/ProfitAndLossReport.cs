@@ -14,4 +14,5 @@ public sealed record ProfitAndLossResponse(
     decimal TaxCollected,
     decimal Cogs,
     decimal GrossProfit,
-    decimal DoctorShares);
+    decimal DoctorShares,
+    decimal SettlementDiscounts = 0m); // M24 — تصفية discounts granted in the window (already netted out of Revenue)

@@ -3,6 +3,7 @@ using VetSystem.Application.Reports;
 using VetSystem.Application.Reports.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Reports;
@@ -61,7 +62,7 @@ public sealed class DoctorIncomeReportService
             from i in _db.Invoices.AsNoTracking()
             join v in _db.Visits.AsNoTracking() on i.VisitId equals v.Id
             where i.IssuedAt >= start && i.IssuedAt < end
-            select new { i.Id, i.Total, i.Status, i.VoidOfInvoiceId, v.DoctorId, v.VisitType };
+            select new { i.Id, i.BatchId, i.Total, i.Status, i.VoidOfInvoiceId, v.DoctorId, v.VisitType };
         if (doctorId is { } id2) invoiceJoin = invoiceJoin.Where(x => x.DoctorId == id2);
         if (visitType is not null) invoiceJoin = invoiceJoin.Where(x => x.VisitType == visitType);
 
@@ -70,10 +71,21 @@ public sealed class DoctorIncomeReportService
             .Where(x => x.VoidOfInvoiceId is not null)
             .Select(x => x.VoidOfInvoiceId!.Value)
             .ToHashSet();
-        var revenueByDoctor = invoiceRows
+        var effectiveRows = invoiceRows
             .Where(x => x.Status == InvoiceStatus.Issued && x.VoidOfInvoiceId is null && !voidedOriginalIds.Contains(x.Id))
+            .ToList();
+
+        // M24 — settled-batch invoices count at their negotiated prices (the share column already
+        // reflects them via the entitlement engine; the revenue column must agree). The batch-level
+        // discount has no per-doctor basis and is deliberately absent here.
+        var invoiceDeltas = await SettledPriceOverlay.LoadInvoiceDeltasAsync(
+            _db,
+            effectiveRows.Where(x => x.BatchId is not null).Select(x => (x.Id, x.BatchId!.Value)).ToList(),
+            cancellationToken);
+
+        var revenueByDoctor = effectiveRows
             .GroupBy(x => x.DoctorId)
-            .ToDictionary(g => g.Key, g => g.Sum(x => x.Total));
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.Total + invoiceDeltas.GetValueOrDefault(x.Id)));
 
         // Share — entitlements accrued to the doctor in the window (by created_at).
         var shareQuery = _db.DoctorEntitlements.AsNoTracking().Where(e => e.CreatedAt >= start && e.CreatedAt < end);

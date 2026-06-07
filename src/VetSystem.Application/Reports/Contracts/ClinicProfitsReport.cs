@@ -21,4 +21,5 @@ public sealed record ClinicProfitsReportResponse(
     decimal DoctorShares,
     decimal DistributedToPartners,
     decimal RetainedByClinic,
-    IReadOnlyList<ProfitAllocation> PartnerAllocations);
+    IReadOnlyList<ProfitAllocation> PartnerAllocations,
+    decimal SettlementDiscounts = 0m); // M24 — تصفية discounts granted in the window (already netted out of Revenue)

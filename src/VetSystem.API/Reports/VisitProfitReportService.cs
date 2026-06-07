@@ -3,6 +3,7 @@ using VetSystem.Application.Reports;
 using VetSystem.Application.Reports.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 using Codes = VetSystem.Domain.Entities;
 
@@ -43,7 +44,7 @@ public abstract class VisitProfitReportService
         // Effective (non-void) invoices in the window that attribute to a visit (walk-ins carry none).
         var invoices = await _db.Invoices.AsNoTracking()
             .Where(i => i.IssuedAt >= start && i.IssuedAt < end && i.VisitId != null)
-            .Select(i => new { i.Id, VisitId = i.VisitId!.Value, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
+            .Select(i => new { i.Id, VisitId = i.VisitId!.Value, i.BatchId, i.Total, i.TaxAmount, i.Status, i.VoidOfInvoiceId })
             .ToListAsync(cancellationToken);
 
         var voidedOriginalIds = invoices
@@ -90,13 +91,20 @@ public abstract class VisitProfitReportService
             .ToListAsync(cancellationToken))
             .ToDictionary(x => x.InvoiceId, x => x.Cost);
 
+        // M24 — settled batches re-price their invoices retroactively; the batch-level discount is
+        // deliberately absent here (no per-visit basis — it lives in clinic-profits at settled_at).
+        var invoiceDeltas = await SettledPriceOverlay.LoadInvoiceDeltasAsync(
+            _db,
+            keptInvoices.Where(i => i.BatchId is not null).Select(i => (i.Id, i.BatchId!.Value)).ToList(),
+            cancellationToken);
+
         // Roll the invoices up to their visit (a visit may have several).
         var perVisit = keptInvoices
             .GroupBy(i => i.VisitId)
             .ToDictionary(
                 g => g.Key,
                 g => (
-                    Revenue: g.Sum(i => i.Total - i.TaxAmount),
+                    Revenue: g.Sum(i => i.Total - i.TaxAmount + invoiceDeltas.GetValueOrDefault(i.Id)),
                     Cogs: g.Sum(i => costByInvoice.TryGetValue(i.Id, out var c) ? c : 0m)));
 
         var rowsAll = visits
