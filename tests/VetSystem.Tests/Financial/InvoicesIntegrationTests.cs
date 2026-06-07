@@ -378,6 +378,187 @@ public sealed class InvoicesIntegrationTests
             .StatusCode.Should().Be(HttpStatusCode.NoContent, "an unbilled prescription is still the vet's to remove");
     }
 
+    [Fact]
+    public async Task Pos_LinkedVisit_AutoAssemblesCatalogVaccination_Once_LegacyFreeTextNever()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var vaccineServiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح السعار", category = "vaccination", defaultPrice = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Catalog-linked, no explicit price → snapshots the catalog default (30).
+        var vaccinationId = Guid.CreateVersion7();
+        (await PostAsync(client, "/vaccinations", new
+        {
+            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId,
+            vaccineType = "لقاح السعار", dateGiven = "2026-06-01",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Legacy free-text vaccination on the same visit — a clinical record only, never billed.
+        (await PostAsync(client, "/vaccinations", new
+        {
+            id = Guid.CreateVersion7(), customerId, visitId,
+            vaccineType = "لقاح قديم", dateGiven = "2026-06-01",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var invoiceId = Guid.CreateVersion7();
+        var posResp = await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"vax-{invoiceId:N}",
+        });
+        posResp.StatusCode.Should().Be(HttpStatusCode.OK, await posResp.Content.ReadAsStringAsync());
+
+        await using var db = NewContext(scope, admin.Id);
+        var items = await db.InvoiceItems.AsNoTracking().Where(it => it.InvoiceId == invoiceId).ToListAsync();
+        items.Should().HaveCount(1, "only the catalog-linked vaccination assembles; free-text never bills");
+        var line = items.Single();
+        line.VaccinationId.Should().Be(vaccinationId);
+        line.ServiceId.Should().Be(vaccineServiceId);
+        line.Quantity.Should().Be(1m);
+        line.UnitPrice.Should().Be(30m, "the create snapshotted the catalog default price");
+        line.LineTotal.Should().Be(30m);
+
+        // A second invoice for the same visit has nothing left to bill.
+        var secondId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = secondId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"vax2-{secondId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "the vaccination is billed; the free-text one never assembles");
+    }
+
+    [Fact]
+    public async Task Pos_BackLinkedVaccinationLine_TillEditsPriceDiscount_ServerWinsQuantity_BilledOnce()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var vaccineServiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح", category = "vaccination", defaultPrice = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var otherServiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = otherServiceId, nameAr = "خدمة أخرى", category = "exam", defaultPrice = 99m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var vaccinationId = Guid.CreateVersion7();
+        (await PostAsync(client, "/vaccinations", new
+        {
+            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId, price = 18m,
+            vaccineType = "لقاح", dateGiven = "2026-06-01",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The back-linked line must agree with the vaccination's catalog vaccine.
+        var mismatchId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = mismatchId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { serviceId = otherServiceId, vaccinationId, quantity = 1m, discountAmount = 0m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"vaxmm-{mismatchId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "the line's service must match the vaccination's");
+
+        // Till-edited price/discount are honoured; the tampered quantity (5) is not.
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { serviceId = vaccineServiceId, vaccinationId, quantity = 5m, unitPrice = 15m, discountAmount = 2m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"vaxbl-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+        var line = await db.InvoiceItems.AsNoTracking().SingleAsync(it => it.InvoiceId == invoiceId);
+        line.VaccinationId.Should().Be(vaccinationId, "the explicit back-linked line suppresses auto-assembly");
+        line.Quantity.Should().Be(1m, "a vaccination always bills as a single line");
+        line.UnitPrice.Should().Be(15m, "the till's price adjustment is honoured over the snapshot");
+        line.DiscountAmount.Should().Be(2m);
+        line.LineTotal.Should().Be(13m);
+
+        var rebillId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = rebillId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { serviceId = vaccineServiceId, vaccinationId, quantity = 1m, discountAmount = 0m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"vaxrb-{rebillId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "a vaccination can be billed once");
+    }
+
+    [Fact]
+    public async Task BilledVaccination_IsFrozen_OnTheVisit()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var vaccineServiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح", category = "vaccination", defaultPrice = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var vaccinationId = Guid.CreateVersion7();
+        (await PostAsync(client, "/vaccinations", new
+        {
+            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId,
+            vaccineType = "لقاح", dateGiven = "2026-06-01",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"vaxfr-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Billed → money/identity fields frozen, clinical fields still editable.
+        var delete = await SendAsync(client, HttpMethod.Delete, $"/vaccinations/{vaccinationId}", null);
+        delete.StatusCode.Should().Be(HttpStatusCode.Conflict, "a billed vaccination cannot be removed from the visit");
+        (await delete.Content.ReadAsStringAsync()).Should().Contain("vaccination_billed");
+
+        var reprice = await SendAsync(client, HttpMethod.Patch, $"/vaccinations/{vaccinationId}", new { price = 99m });
+        reprice.StatusCode.Should().Be(HttpStatusCode.Conflict, "a billed vaccination cannot be re-priced");
+        (await reprice.Content.ReadAsStringAsync()).Should().Contain("vaccination_billed");
+
+        (await SendAsync(client, HttpMethod.Patch, $"/vaccinations/{vaccinationId}", new { nextDueDate = "2026-09-01" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK, "the clinical schedule stays editable after billing");
+
+        // An unbilled vaccination is still the vet's to remove.
+        var freeVax = Guid.CreateVersion7();
+        (await PostAsync(client, "/vaccinations", new
+        {
+            id = freeVax, customerId, visitId, serviceId = vaccineServiceId,
+            vaccineType = "لقاح آخر", dateGiven = "2026-06-01",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await SendAsync(client, HttpMethod.Delete, $"/vaccinations/{freeVax}", null))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+    }
+
     // ---- helpers ----
 
     private static HttpClient AuthedClient(VetApiFactory factory, User admin)
