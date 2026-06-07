@@ -559,6 +559,325 @@ public sealed class InvoicesIntegrationTests
             .StatusCode.Should().Be(HttpStatusCode.NoContent);
     }
 
+    // ---- M23: checkup fee, night stays & billable in-clinic meds on the invoice rail ----
+    // NOTE: these (and the older tests above) lean on AdminTestSeed leaving default_checkup_fee at
+    // 0 — visits created without an explicit checkupFeeApplied carry no chargeable fee, so the M23
+    // assembly blocks stay inert for the pre-M23 assertions. Fees here are always explicit.
+
+    [Fact]
+    public async Task Pos_LinkedVisit_AssemblesCareCharges_AndBillableInClinicRx_WithoutDoubleDeduct()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var (warehouseId, productId) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress", checkupFeeApplied = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Billable in-clinic med (deducts at recording) + a non-billable one (never bills).
+        var billableRxId = Guid.CreateVersion7();
+        (await PostAsync(client, "/prescriptions", new { id = billableRxId, visitId, productId, dispenseType = "administered_in_clinic", billable = true, quantity = 2m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, "/prescriptions", new { id = Guid.CreateVersion7(), visitId, productId, dispenseType = "administered_in_clinic", quantity = 1m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // A closed two-night stay (explicit rate — no settings dance).
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new { id = stayId, visitId, careType = "medical", nightlyRate = 80m, checkInAt = "2026-06-01T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-03T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId,
+            customerId,
+            visitId,
+            discountAmount = 0m,
+            items = Array.Empty<object>(),
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"care-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+
+        var items = await db.InvoiceItems.AsNoTracking().Where(it => it.InvoiceId == invoiceId).ToListAsync();
+        items.Should().HaveCount(3, "the billable med, the checkup fee, and the closed stay assemble; the non-billable med never bills");
+
+        var rxLine = items.Single(it => it.PrescriptionId == billableRxId);
+        rxLine.LineTotal.Should().Be(50m, "2 × the 25 catalog price");
+
+        var checkupService = await db.Services.AsNoTracking().SingleAsync(s => s.Category == ServiceCategories.Checkup);
+        var feeLine = items.Single(it => it.CheckupFeeVisitId == visitId);
+        feeLine.ServiceId.Should().Be(checkupService.Id, "the fee line bills the per-environment system service");
+        feeLine.Quantity.Should().Be(1m);
+        feeLine.LineTotal.Should().Be(30m);
+
+        var stayLine = items.Single(it => it.NightStayId == stayId);
+        stayLine.Quantity.Should().Be(2m, "quantity = nights");
+        stayLine.UnitPrice.Should().Be(80m, "unit price = the stay's rate snapshot");
+        stayLine.LineTotal.Should().Be(160m);
+
+        var stock = await db.StockItems.AsNoTracking()
+            .Where(s => s.LocationType == StockLocation.Warehouse && s.LocationId == warehouseId && s.ProductId == productId)
+            .Select(s => s.Quantity).FirstAsync();
+        stock.Should().Be(97m, "both administered meds deducted at recording (2 + 1); issuance must NOT deduct the billable one again");
+
+        // Everything is billed — a second invoice for the visit has nothing left.
+        var secondId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = secondId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"care2-{secondId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Pos_ExplicitCareChargeLines_TillWinsPrice_ServerWinsQuantity()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the deduction warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress", checkupFeeApplied = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new { id = stayId, visitId, careType = "hotel", nightlyRate = 80m, checkInAt = "2026-06-01T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-03T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK); // 2 nights
+
+        // The till discounts the fee to 25 and the rate to 70 (−10 line discount); quantities are
+        // tampered with (9) to prove the server wins. No product/service ids — the server resolves
+        // the system services.
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId,
+            customerId,
+            visitId,
+            discountAmount = 0m,
+            items = new object[]
+            {
+                new { checkupFeeVisitId = visitId, quantity = 9m, unitPrice = 25m, discountAmount = 0m },
+                new { nightStayId = stayId, quantity = 9m, unitPrice = 70m, discountAmount = 10m },
+            },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"careedit-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+        var items = await db.InvoiceItems.AsNoTracking().Where(it => it.InvoiceId == invoiceId).ToListAsync();
+        items.Should().HaveCount(2, "the explicit back-linked lines suppress re-assembly");
+
+        var feeLine = items.Single(it => it.CheckupFeeVisitId == visitId);
+        feeLine.Quantity.Should().Be(1m, "a checkup fee always bills once");
+        feeLine.UnitPrice.Should().Be(25m, "the till's price adjustment is honoured");
+
+        var stayLine = items.Single(it => it.NightStayId == stayId);
+        stayLine.Quantity.Should().Be(2m, "nights are server-authoritative, not the request's 9");
+        stayLine.UnitPrice.Should().Be(70m);
+        stayLine.LineTotal.Should().Be(130m, "2 × 70 − 10");
+    }
+
+    [Fact]
+    public async Task Pos_OpenVisit_CheckupFeeNotChargeable()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the deduction warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        // Created OPEN — بدء الكشف never confirmed the fee, so the proposed 30 is not chargeable.
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, checkupFeeApplied = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var emptyId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = emptyId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"openfee-{emptyId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "an open visit's fee never assembles");
+
+        var explicitId = Guid.CreateVersion7();
+        var explicitResp = await PostAsync(client, "/pos/invoices", new
+        {
+            id = explicitId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { checkupFeeVisitId = visitId, quantity = 1m, unitPrice = 30m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"openfee2-{explicitId:N}",
+        });
+        explicitResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(explicitResp)).Should().Be("checkup_fee_not_started");
+    }
+
+    [Fact]
+    public async Task Pos_OpenNightStay_NotAssembled_AndExplicitRejected()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the deduction warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress", checkupFeeApplied = 0m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new { id = stayId, visitId, careType = "icu", nightlyRate = 80m, checkInAt = "2026-06-01T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK); // never closed
+
+        var emptyId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = emptyId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"openstay-{emptyId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "an open stay has no nights to bill");
+
+        var explicitId = Guid.CreateVersion7();
+        var explicitResp = await PostAsync(client, "/pos/invoices", new
+        {
+            id = explicitId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { nightStayId = stayId, quantity = 1m, unitPrice = 80m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"openstay2-{explicitId:N}",
+        });
+        explicitResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(explicitResp)).Should().Be("night_stay_open");
+    }
+
+    [Fact]
+    public async Task CompletionBackstop_ThenPos_NeverDoubleCharges()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the deduction warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress", checkupFeeApplied = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new { id = stayId, visitId, careType = "medical", nightlyRate = 80m, checkInAt = "2026-06-01T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-02T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK); // 1 night
+
+        // The visit never reaches the till — completion backstops both charges to the ledger.
+        (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using (var db = NewContext(scope, admin.Id))
+        {
+            (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
+                .Should().Be(110m, "30 checkup + 1 × 80 night");
+        }
+
+        // A later POS ring-up of the (completed) visit finds nothing to bill…
+        var emptyId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = emptyId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"after-{emptyId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        // …and explicit back-links are rejected against the backstop's ledger keys.
+        var feeId = Guid.CreateVersion7();
+        var feeResp = await PostAsync(client, "/pos/invoices", new
+        {
+            id = feeId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { checkupFeeVisitId = visitId, quantity = 1m, unitPrice = 30m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"after2-{feeId:N}",
+        });
+        feeResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(feeResp)).Should().Be("checkup_fee_already_billed");
+
+        var stayLineId = Guid.CreateVersion7();
+        var stayResp = await PostAsync(client, "/pos/invoices", new
+        {
+            id = stayLineId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { nightStayId = stayId, quantity = 1m, unitPrice = 80m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"after3-{stayLineId:N}",
+        });
+        stayResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(stayResp)).Should().Be("night_stay_already_billed");
+
+        // The backstopped fee is frozen on the visit too.
+        var patchResp = await SendAsync(client, HttpMethod.Patch, $"/visits/{visitId}", new { checkupFeeApplied = 50m });
+        patchResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(patchResp)).Should().Be("visit_locked"); // terminal visit; the fee guard backs non-terminal edits
+    }
+
+    [Fact]
+    public async Task PosBillsCareCharges_ThenCompletion_PostsNothingExtra()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the deduction warehouse up-front
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress", checkupFeeApplied = 30m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new { id = stayId, visitId, careType = "medical", nightlyRate = 80m, checkInAt = "2026-06-01T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-03T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK); // 2 nights
+
+        // The cashier rings the visit up BEFORE completion — fee + stay bill on the invoice.
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"posfirst-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The freeze applies the moment the invoice line exists (visit still in_progress).
+        var patchResp = await SendAsync(client, HttpMethod.Patch, $"/visits/{visitId}", new { checkupFeeApplied = 50m });
+        patchResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(patchResp)).Should().Be("checkup_fee_billed");
+
+        (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+        (await db.LedgerEntries.AsNoTracking().CountAsync(e =>
+                e.EntryType == LedgerEntryType.CheckupFee || e.EntryType == LedgerEntryType.NightStay))
+            .Should().Be(0, "the invoice billed both charges; the completion backstop must post nothing");
+        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
+            .Should().Be(190m, "one invoice entry: 30 fee + 2 × 80 nights, unpaid");
+    }
+
+    private static async Task<string?> ErrorCodeAsync(HttpResponseMessage response)
+        => (await response.Content.ReadFromJsonAsync<JsonElement>()).TryGetProperty("code", out var code)
+            ? code.GetString()
+            : null;
+
     // ---- helpers ----
 
     private static HttpClient AuthedClient(VetApiFactory factory, User admin)
