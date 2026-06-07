@@ -14,7 +14,9 @@ internal sealed class VaccinationConfiguration : IEntityTypeConfiguration<Vaccin
         builder.Property(v => v.PetId).HasColumnName("pet_id");
         builder.Property(v => v.CustomerId).HasColumnName("customer_id");
         builder.Property(v => v.VisitId).HasColumnName("visit_id");
+        builder.Property(v => v.ServiceId).HasColumnName("service_id");
         builder.Property(v => v.VaccineType).HasColumnName("vaccine_type").IsRequired().HasMaxLength(128);
+        builder.Property(v => v.Price).HasColumnName("price").HasColumnType("numeric(14,2)");
         builder.Property(v => v.DateGiven).HasColumnName("date_given").IsRequired();
         builder.Property(v => v.NextDueDate).HasColumnName("next_due_date");
         builder.Property(v => v.CertificateUrl).HasColumnName("certificate_url");
@@ -37,6 +39,11 @@ internal sealed class VaccinationConfiguration : IEntityTypeConfiguration<Vaccin
         builder.HasOne<Visit>()
             .WithMany()
             .HasForeignKey(v => v.VisitId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<Service>()
+            .WithMany()
+            .HasForeignKey(v => v.ServiceId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

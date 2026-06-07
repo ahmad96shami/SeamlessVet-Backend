@@ -22,6 +22,7 @@ internal sealed class InvoiceItemConfiguration : IEntityTypeConfiguration<Invoic
         builder.Property(i => i.LineTotal).HasColumnName("line_total").HasColumnType("numeric(14,2)");
         builder.Property(i => i.PrescriptionId).HasColumnName("prescription_id");
         builder.Property(i => i.ProcedureId).HasColumnName("procedure_id");
+        builder.Property(i => i.VaccinationId).HasColumnName("vaccination_id");
 
         // SCHEMA §8 — a line targets exactly one of product / service.
         builder.ToTable(t => t.HasCheckConstraint(
@@ -62,6 +63,11 @@ internal sealed class InvoiceItemConfiguration : IEntityTypeConfiguration<Invoic
         builder.HasOne<Procedure>()
             .WithMany()
             .HasForeignKey(i => i.ProcedureId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne<Vaccination>()
+            .WithMany()
+            .HasForeignKey(i => i.VaccinationId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }
