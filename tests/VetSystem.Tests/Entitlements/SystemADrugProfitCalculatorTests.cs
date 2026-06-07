@@ -122,4 +122,45 @@ public sealed class SystemADrugProfitCalculatorTests
         var result = _systemA.Calculate(new SystemAInput(lines, ExamFee: 0m, DoctorSharePercent: 50m, DoctorShareCeiling: null));
         result.ComputedAmount.Should().Be(150m);
     }
+
+    // ---- M24 — the batch-settlement discount enters the basis like the exam fee ----
+
+    [Fact]
+    public void SettlementDiscount_ReducesTheBasis_LikeTheExamFee()
+    {
+        // 50% × (400 − 100 − 50) = 125 (the worked example from the M24 client decision).
+        var result = _systemA.Calculate(new SystemAInput(
+            Profit400, ExamFee: 100m, DoctorSharePercent: 50m, DoctorShareCeiling: null, SettlementDiscount: 50m));
+        result.ComputedAmount.Should().Be(125m);
+        result.CeilingApplied.Should().BeNull();
+    }
+
+    [Fact]
+    public void SettlementDiscount_ExceedingProfit_ClampsToZero()
+    {
+        // basis = 400 − 100 − 350 = −50 → clamped to 0 (clinic absorbs, same as the exam-fee clamp).
+        var result = _systemA.Calculate(new SystemAInput(
+            Profit400, ExamFee: 100m, DoctorSharePercent: 50m, DoctorShareCeiling: null, SettlementDiscount: 350m));
+        result.ComputedAmount.Should().Be(0m);
+        result.CeilingApplied.Should().BeNull();
+    }
+
+    [Fact]
+    public void SettlementDiscount_ComposesWithTheCeiling()
+    {
+        // 100% × (400 − 0 − 100) = 300, ceiling 250 → capped at 250.
+        var result = _systemA.Calculate(new SystemAInput(
+            Profit400, ExamFee: 0m, DoctorSharePercent: 100m, DoctorShareCeiling: 250m, SettlementDiscount: 100m));
+        result.ComputedAmount.Should().Be(250m);
+        result.CeilingApplied.Should().Be(250m);
+    }
+
+    [Fact]
+    public void DefaultDiscount_IsZero_PreservingPreM24Behaviour()
+    {
+        var withDefault = _systemA.Calculate(new SystemAInput(Profit400, 100m, 50m, null));
+        var withExplicitZero = _systemA.Calculate(new SystemAInput(Profit400, 100m, 50m, null, SettlementDiscount: 0m));
+        withDefault.Should().Be(withExplicitZero);
+        withDefault.ComputedAmount.Should().Be(150m);
+    }
 }
