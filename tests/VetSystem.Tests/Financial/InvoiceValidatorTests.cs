@@ -142,6 +142,51 @@ public sealed class InvoiceValidatorTests
     }
 
     [Fact]
+    public void Pos_CareChargeLines_MayOmitCatalogIds()
+    {
+        // M23 — the server resolves the system service for night-stay / checkup-fee back-links.
+        var req = Build(
+            [
+                new InvoiceLineRequest(null, null, null, 2m, 80m, NightStayId: Guid.CreateVersion7()),
+                new InvoiceLineRequest(null, null, null, 1m, 30m, CheckupFeeVisitId: Guid.CreateVersion7()),
+            ],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Pos_NightStayLinkOnProductLine_Fails()
+    {
+        var req = Build(
+            [new InvoiceLineRequest(Guid.CreateVersion7(), null, null, 2m, 80m, NightStayId: Guid.CreateVersion7())],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("a night-stay line is a service line");
+    }
+
+    [Fact]
+    public void Pos_LineWithNightStayAndCheckupFee_Fails()
+    {
+        var req = Build(
+            [new InvoiceLineRequest(null, null, null, 1m, 80m,
+                NightStayId: Guid.CreateVersion7(), CheckupFeeVisitId: Guid.CreateVersion7())],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("at most one back-link per line");
+    }
+
+    [Fact]
+    public void Pos_DuplicateNightStayBackLinks_Fail()
+    {
+        var stayId = Guid.CreateVersion7();
+        var req = Build(
+            [
+                new InvoiceLineRequest(null, null, null, 2m, 80m, NightStayId: stayId),
+                new InvoiceLineRequest(null, null, null, 2m, 80m, NightStayId: stayId),
+            ],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("each night stay may be billed by at most one line");
+    }
+
+    [Fact]
     public void Voucher_Valid_Passes()
     {
         var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), null, 50m, "cash", null, "idem-1");

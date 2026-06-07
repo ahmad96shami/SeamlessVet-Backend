@@ -8,11 +8,13 @@ namespace VetSystem.Application.Financial.Contracts;
 /// time (SCHEMA "Key invariants" #8).
 /// <para>
 /// A line may back-link one of the request visit's charges via <c>PrescriptionId</c> (with the
-/// matching <c>ProductId</c>), <c>ProcedureId</c>, or <c>VaccinationId</c> (each with the matching
-/// <c>ServiceId</c>) so the POS can present visit charges as editable cart lines (price/discount).
-/// The server then resolves the line from the clinical record — <b>quantity is
-/// server-authoritative</b> (the prescription's / 1 for a procedure or vaccination; the client
-/// value is ignored) — and skips that charge during auto-assembly.
+/// matching <c>ProductId</c>), <c>ProcedureId</c> / <c>VaccinationId</c> (each with the matching
+/// <c>ServiceId</c>), or the M23 care charges <c>NightStayId</c> / <c>CheckupFeeVisitId</c> (no
+/// product/service id needed — the server resolves the per-environment system service itself) so
+/// the POS can present visit charges as editable cart lines (price/discount). The server then
+/// resolves the line from the clinical record — <b>quantity is server-authoritative</b> (the
+/// prescription's / the stay's nights / 1 otherwise; the client value is ignored) — and skips that
+/// charge during auto-assembly.
 /// </para>
 /// </summary>
 public sealed record InvoiceLineRequest(
@@ -24,7 +26,9 @@ public sealed record InvoiceLineRequest(
     decimal DiscountAmount = 0m,
     Guid? PrescriptionId = null,
     Guid? ProcedureId = null,
-    Guid? VaccinationId = null);
+    Guid? VaccinationId = null,
+    Guid? NightStayId = null,
+    Guid? CheckupFeeVisitId = null);
 
 /// <summary>
 /// A payment leg. Several may be sent for a mixed payment (PRD §5.4). M19: a <c>cheque</c> leg may
@@ -94,7 +98,9 @@ public sealed record InvoiceItemResponse(
     decimal LineTotal,
     Guid? PrescriptionId,
     Guid? ProcedureId,
-    Guid? VaccinationId);
+    Guid? VaccinationId,
+    Guid? NightStayId,
+    Guid? CheckupFeeVisitId);
 
 public sealed record PaymentResponse(
     Guid Id,

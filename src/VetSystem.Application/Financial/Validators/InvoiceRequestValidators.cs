@@ -12,9 +12,17 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
 {
     public InvoiceLineRequestValidator()
     {
+        // M23 — a night-stay / checkup-fee back-linked line may omit BOTH catalog ids: the server
+        // resolves the per-environment system service itself (the persisted row always satisfies
+        // the DB's product-XOR-service CHECK). Every other line names exactly one target.
         RuleFor(l => l)
             .Must(l => (l.ProductId is not null) ^ (l.ServiceId is not null))
+            .When(l => l.NightStayId is null && l.CheckupFeeVisitId is null)
             .WithMessage("Each line must reference exactly one of product_id or service_id.");
+        RuleFor(l => l.ProductId)
+            .Null()
+            .When(l => l.NightStayId is not null || l.CheckupFeeVisitId is not null)
+            .WithMessage("A night-stay / checkup-fee line is a service line; it cannot reference a product.");
 
         RuleFor(l => l.Quantity).GreaterThan(0m);
         RuleFor(l => l.UnitPrice!.Value).GreaterThanOrEqualTo(0m).When(l => l.UnitPrice.HasValue);
@@ -23,8 +31,9 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
         // Visit-charge back-links: at most one, and it must agree with the line's catalog target
         // (a prescription dispenses a product; a procedure / vaccination performs a service).
         RuleFor(l => l)
-            .Must(l => new[] { l.PrescriptionId, l.ProcedureId, l.VaccinationId }.Count(b => b is not null) <= 1)
-            .WithMessage("A line may back-link a prescription, a procedure, or a vaccination — at most one.");
+            .Must(l => new[] { l.PrescriptionId, l.ProcedureId, l.VaccinationId, l.NightStayId, l.CheckupFeeVisitId }
+                .Count(b => b is not null) <= 1)
+            .WithMessage("A line may back-link one visit charge (prescription / procedure / vaccination / night stay / checkup fee) — at most one.");
         RuleFor(l => l.ProductId)
             .NotNull()
             .When(l => l.PrescriptionId is not null)
@@ -42,17 +51,20 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
 
 internal static class InvoiceLineRules
 {
-    /// <summary>No two lines may bill the same prescription / procedure / vaccination (the
-    /// already-billed check in the service only sees committed invoices, not sibling lines of this
-    /// request).</summary>
+    /// <summary>No two lines may bill the same visit charge (the already-billed check in the
+    /// service only sees committed invoices, not sibling lines of this request).</summary>
     public static bool BackLinksAreDistinct(IReadOnlyList<InvoiceLineRequest> items)
     {
         var rx = items.Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToList();
         var procedures = items.Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToList();
         var vaccinations = items.Where(i => i.VaccinationId is not null).Select(i => i.VaccinationId!.Value).ToList();
+        var nightStays = items.Where(i => i.NightStayId is not null).Select(i => i.NightStayId!.Value).ToList();
+        var checkupFees = items.Where(i => i.CheckupFeeVisitId is not null).Select(i => i.CheckupFeeVisitId!.Value).ToList();
         return rx.Distinct().Count() == rx.Count
                && procedures.Distinct().Count() == procedures.Count
-               && vaccinations.Distinct().Count() == vaccinations.Count;
+               && vaccinations.Distinct().Count() == vaccinations.Count
+               && nightStays.Distinct().Count() == nightStays.Count
+               && checkupFees.Distinct().Count() == checkupFees.Count;
     }
 }
 
