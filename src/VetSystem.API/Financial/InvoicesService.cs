@@ -389,9 +389,12 @@ public sealed class InvoicesService
                 .Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToHashSet();
             var explicitVaccinations = requestItems
                 .Where(i => i.VaccinationId is not null).Select(i => i.VaccinationId!.Value).ToHashSet();
+            var explicitNightStays = requestItems
+                .Where(i => i.NightStayId is not null).Select(i => i.NightStayId!.Value).ToHashSet();
+            var explicitCheckupFee = requestItems.Any(i => i.CheckupFeeVisitId is not null);
             lines.AddRange(await AssembleVisitLinesAsync(
                 visit, customerId, pricingAsOf, applyContractPricing, explicitRx, explicitProcedures,
-                explicitVaccinations, cancellationToken));
+                explicitVaccinations, explicitNightStays, explicitCheckupFee, cancellationToken));
         }
 
         if (lines.Count == 0)
@@ -465,6 +468,8 @@ public sealed class InvoicesService
                 PrescriptionId = line.PrescriptionId,
                 ProcedureId = line.ProcedureId,
                 VaccinationId = line.VaccinationId,
+                NightStayId = line.NightStayId,
+                CheckupFeeVisitId = line.CheckupFeeVisitId,
             });
         }
 
@@ -490,8 +495,25 @@ public sealed class InvoicesService
         var productItems = await _db.InvoiceItems
             .Where(it => it.InvoiceId == invoice.Id && it.ProductId != null)
             .ToListAsync(cancellationToken);
+
+        // M23 — a billable administered_in_clinic prescription already deducted its stock at
+        // recording (movement key rx-{id}); deducting its invoice line again would double-count.
+        var backLinkedRxIds = productItems
+            .Where(it => it.PrescriptionId != null).Select(it => it.PrescriptionId!.Value).ToList();
+        HashSet<Guid> administeredRx = backLinkedRxIds.Count == 0
+            ? []
+            : (await _db.Prescriptions.AsNoTracking()
+                .Where(p => backLinkedRxIds.Contains(p.Id) && p.DispenseType == DispenseType.AdministeredInClinic)
+                .Select(p => p.Id)
+                .ToListAsync(cancellationToken)).ToHashSet();
+
         foreach (var item in productItems)
         {
+            if (item.PrescriptionId is { } linkedRx && administeredRx.Contains(linkedRx))
+            {
+                continue; // stock moved when the med was administered
+            }
+
             await _inventory.ApplyMovementAsync(
                 new MovementIntent(
                     Id: null,
@@ -580,6 +602,9 @@ public sealed class InvoicesService
         var quantity = item.Quantity;
         decimal? procedurePrice = null;
         decimal? vaccinationPrice = null;
+        decimal? careChargePrice = null;        // M23 — night-stay rate / checkup fee snapshot
+        Service? systemService = null;          // M23 — server-resolved service for a care-charge line
+        string? careChargeDescription = null;   // M23 — default description for a care-charge line
 
         // Back-linked visit charges (the POS presents them as locked-quantity cart lines so the
         // cashier can adjust price/discount): the clinical record stays authoritative for WHAT is
@@ -601,10 +626,14 @@ public sealed class InvoicesService
                     $"Prescription '{rxId}' does not belong to visit '{visit.Id}'.");
             }
 
-            if (rx.DispenseType != DispenseType.DispensedToOwner)
+            // M23 — administered_in_clinic meds bill too when flagged billable (their stock already
+            // moved at recording; the deduction loop skips them).
+            var rxBillable = rx.DispenseType == DispenseType.DispensedToOwner
+                             || (rx.DispenseType == DispenseType.AdministeredInClinic && rx.Billable);
+            if (!rxBillable)
             {
                 throw new ConflictException("prescription_not_billable",
-                    "Only dispensed_to_owner prescriptions are billable as invoice lines.");
+                    "Only dispensed_to_owner or billable administered_in_clinic prescriptions are billable as invoice lines.");
             }
 
             if (rx.ProductId != item.ProductId)
@@ -686,12 +715,115 @@ public sealed class InvoicesService
             quantity = 1m;                        // a vaccination always bills as a single line
             vaccinationPrice = vaccination.Price; // the recording-time snapshot, unless the request overrides it
         }
+        else if (item.NightStayId is { } nightStayId)
+        {
+            // M23 — a closed night stay bills as a system-service line: quantity = nights
+            // (server-wins), unit price = the stay's rate unless the till overrides it.
+            if (visit is null)
+            {
+                throw new ConflictException("line_backlink_requires_visit",
+                    "A night-stay-linked line requires the invoice to be linked to its visit.");
+            }
+
+            var stay = await _db.NightStays.AsNoTracking()
+                           .FirstOrDefaultAsync(n => n.Id == nightStayId, cancellationToken)
+                       ?? throw new NotFoundException("night_stay", nightStayId);
+            if (stay.VisitId != visit.Id)
+            {
+                throw new ConflictException("night_stay_not_in_visit",
+                    $"Night stay '{nightStayId}' does not belong to visit '{visit.Id}'.");
+            }
+
+            if (stay.CheckOutAt is null)
+            {
+                throw new ConflictException("night_stay_open",
+                    "An open night stay has no nights to bill yet — close it first.");
+            }
+
+            if (stay.NightsCount <= 0)
+            {
+                throw new ConflictException("night_stay_nothing_to_bill",
+                    "The night stay counts zero nights — there is nothing to bill.");
+            }
+
+            // Both billing writers freeze the stay: an invoice back-link, or the completion
+            // backstop's ledger entry (an offline-issued invoice can replay after completion ran).
+            var stayBilled =
+                await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.NightStayId == nightStayId, cancellationToken)
+                || await _db.LedgerEntries.AsNoTracking()
+                    .AnyAsync(e => e.IdempotencyKey == $"night-stay-{nightStayId}", cancellationToken);
+            if (stayBilled)
+            {
+                throw new ConflictException("night_stay_already_billed",
+                    $"Night stay '{nightStayId}' is already billed (invoice line or completion backstop).");
+            }
+
+            systemService = await SystemServices.GetOrCreateNightStayAsync(_db, cancellationToken);
+            if (item.ServiceId is { } sid && sid != systemService.Id)
+            {
+                throw new ConflictException("night_stay_service_mismatch",
+                    "A night-stay line bills the system night-stay service; omit service_id or send the matching one.");
+            }
+
+            quantity = stay.NightsCount;
+            careChargePrice = stay.NightlyRate;
+            careChargeDescription = $"{systemService.NameAr} ({stay.CareType}) × {stay.NightsCount}";
+        }
+        else if (item.CheckupFeeVisitId is { } checkupVisitId)
+        {
+            // M23 — the visit's checkup fee bills once the exam started (بدء الكشف set the amount).
+            if (visit is null || checkupVisitId != visit.Id)
+            {
+                throw new ConflictException("checkup_fee_visit_mismatch",
+                    "A checkup-fee line must back-link the invoice's own visit.");
+            }
+
+            if (visit.VisitType != VisitType.InClinic || visit.CheckupFeeApplied is not > 0m)
+            {
+                throw new ConflictException("checkup_fee_not_applicable",
+                    "The visit carries no chargeable checkup fee.");
+            }
+
+            if (visit.Status == VisitStatus.Open)
+            {
+                throw new ConflictException("checkup_fee_not_started",
+                    "The checkup fee becomes chargeable when the examination starts (بدء الكشف).");
+            }
+
+            var feeBilled =
+                await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.CheckupFeeVisitId == visit.Id, cancellationToken)
+                || await _db.LedgerEntries.AsNoTracking()
+                    .AnyAsync(e => e.IdempotencyKey == $"checkup-{visit.Id}", cancellationToken);
+            if (feeBilled)
+            {
+                throw new ConflictException("checkup_fee_already_billed",
+                    $"The checkup fee of visit '{visit.Id}' is already billed (invoice line or completion backstop).");
+            }
+
+            systemService = await SystemServices.GetOrCreateCheckupAsync(_db, cancellationToken);
+            if (item.ServiceId is { } sid && sid != systemService.Id)
+            {
+                throw new ConflictException("checkup_fee_service_mismatch",
+                    "A checkup-fee line bills the system checkup service; omit service_id or send the matching one.");
+            }
+
+            quantity = 1m;
+            careChargePrice = visit.CheckupFeeApplied;
+        }
 
         decimal unitPrice;
         decimal costPrice;
         string? description = item.Description;
 
-        if (item.ProductId is { } productId)
+        if (systemService is not null)
+        {
+            // M23 care-charge line — the system service is already resolved; the request price
+            // (till-wins) overrides the clinical snapshot.
+            unitPrice = item.UnitPrice ?? careChargePrice!.Value;
+            costPrice = 0m;
+            description ??= careChargeDescription ?? systemService.NameAr;
+        }
+        else if (item.ProductId is { } productId)
         {
             var product = await _db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId, cancellationToken)
                           ?? throw new NotFoundException("product", productId);
@@ -720,17 +852,21 @@ public sealed class InvoicesService
         }
 
         return new ResolvedLine(
-            item.ProductId, item.ServiceId, description, quantity, unitPrice, costPrice,
-            Money(item.DiscountAmount), lineTotal, item.PrescriptionId, item.ProcedureId, item.VaccinationId);
+            item.ProductId, systemService?.Id ?? item.ServiceId, description, quantity, unitPrice, costPrice,
+            Money(item.DiscountAmount), lineTotal, item.PrescriptionId, item.ProcedureId, item.VaccinationId,
+            item.NightStayId, item.CheckupFeeVisitId);
     }
 
     /// <summary>
-    /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c>
-    /// prescription, every billable procedure, and every catalog-linked vaccination (M22) that no
-    /// existing invoice line already references — minus any the request already billed as explicit
-    /// back-linked lines (the POS cart's editable visit lines). On field invoices, dispensed-med
-    /// lines bill at the contract-overridden price when one applies (M8 task 10); procedures and
-    /// vaccinations (services) are never contract-overridden and use the visit-set price snapshot.
+    /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c> (or
+    /// M23 billable <c>administered_in_clinic</c>) prescription, every billable procedure, every
+    /// catalog-linked vaccination (M22), every closed night stay, and the checkup fee of a started
+    /// in-clinic visit (M23) that no existing invoice line already references — minus any the
+    /// request already billed as explicit back-linked lines (the POS cart's editable visit lines).
+    /// The M23 care charges additionally skip anything the completion backstop already posted to
+    /// the ledger (<c>checkup-{visitId}</c> / <c>night-stay-{id}</c>). On field invoices,
+    /// dispensed-med lines bill at the contract-overridden price when one applies (M8 task 10);
+    /// service lines are never contract-overridden.
     /// </summary>
     private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(
         Visit visit,
@@ -740,12 +876,16 @@ public sealed class InvoicesService
         IReadOnlySet<Guid> excludePrescriptionIds,
         IReadOnlySet<Guid> excludeProcedureIds,
         IReadOnlySet<Guid> excludeVaccinationIds,
+        IReadOnlySet<Guid> excludeNightStayIds,
+        bool excludeCheckupFee,
         CancellationToken cancellationToken)
     {
         var lines = new List<ResolvedLine>();
 
         var dispensed = await _db.Prescriptions.AsNoTracking()
-            .Where(p => p.VisitId == visit.Id && p.DispenseType == DispenseType.DispensedToOwner)
+            .Where(p => p.VisitId == visit.Id
+                        && (p.DispenseType == DispenseType.DispensedToOwner
+                            || (p.DispenseType == DispenseType.AdministeredInClinic && p.Billable)))
             .ToListAsync(cancellationToken);
 
         if (dispensed.Count > 0)
@@ -857,6 +997,82 @@ public sealed class InvoicesService
                     PrescriptionId: null,
                     ProcedureId: null,
                     VaccinationId: vaccination.Id));
+            }
+        }
+
+        // M23 — the checkup fee of a STARTED in-clinic visit (بدء الكشف applied the amount; an
+        // open visit's proposed fee is not chargeable yet). Skipped when an invoice line or the
+        // completion backstop already billed it.
+        if (!excludeCheckupFee
+            && visit.VisitType == VisitType.InClinic
+            && visit.Status != VisitStatus.Open
+            && visit.CheckupFeeApplied is > 0m)
+        {
+            var feeBilled =
+                await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.CheckupFeeVisitId == visit.Id, cancellationToken)
+                || await _db.LedgerEntries.AsNoTracking()
+                    .AnyAsync(e => e.IdempotencyKey == $"checkup-{visit.Id}", cancellationToken);
+            if (!feeBilled)
+            {
+                var checkupService = await SystemServices.GetOrCreateCheckupAsync(_db, cancellationToken);
+                var fee = Money(visit.CheckupFeeApplied.Value);
+                lines.Add(new ResolvedLine(
+                    ProductId: null,
+                    ServiceId: checkupService.Id,
+                    Description: checkupService.NameAr,
+                    Quantity: 1m,
+                    UnitPrice: fee,
+                    CostPrice: 0m,
+                    DiscountAmount: 0m,
+                    LineTotal: fee,
+                    PrescriptionId: null,
+                    ProcedureId: null,
+                    VaccinationId: null,
+                    CheckupFeeVisitId: visit.Id));
+            }
+        }
+
+        // M23 — closed night stays (quantity = nights, price = the stay's rate snapshot). Open
+        // stays can't price yet; zero-total stays have nothing to bill; the completion backstop's
+        // ledger entry counts as billed.
+        var stays = await _db.NightStays.AsNoTracking()
+            .Where(n => n.VisitId == visit.Id && n.CheckOutAt != null && n.Total > 0m)
+            .ToListAsync(cancellationToken);
+
+        if (stays.Count > 0)
+        {
+            var stayIds = stays.Select(s => s.Id).ToList();
+            var billedStays = (await _db.InvoiceItems.AsNoTracking()
+                    .Where(it => it.NightStayId != null && stayIds.Contains(it.NightStayId!.Value))
+                    .Select(it => it.NightStayId!.Value)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+            billedStays.UnionWith(excludeNightStayIds);
+
+            var stayKeys = stays.Select(s => $"night-stay-{s.Id}").ToList();
+            var postedKeys = (await _db.LedgerEntries.AsNoTracking()
+                    .Where(e => stayKeys.Contains(e.IdempotencyKey))
+                    .Select(e => e.IdempotencyKey)
+                    .ToListAsync(cancellationToken))
+                .ToHashSet();
+
+            Service? nightStayService = null;
+            foreach (var stay in stays.Where(s => !billedStays.Contains(s.Id) && !postedKeys.Contains($"night-stay-{s.Id}")))
+            {
+                nightStayService ??= await SystemServices.GetOrCreateNightStayAsync(_db, cancellationToken);
+                lines.Add(new ResolvedLine(
+                    ProductId: null,
+                    ServiceId: nightStayService.Id,
+                    Description: $"{nightStayService.NameAr} ({stay.CareType}) × {stay.NightsCount}",
+                    Quantity: stay.NightsCount,
+                    UnitPrice: stay.NightlyRate,
+                    CostPrice: 0m,
+                    DiscountAmount: 0m,
+                    LineTotal: Money(stay.NightsCount * stay.NightlyRate),
+                    PrescriptionId: null,
+                    ProcedureId: null,
+                    VaccinationId: null,
+                    NightStayId: stay.Id));
             }
         }
 
@@ -1011,5 +1227,7 @@ public sealed class InvoicesService
         decimal LineTotal,
         Guid? PrescriptionId,
         Guid? ProcedureId,
-        Guid? VaccinationId);
+        Guid? VaccinationId,
+        Guid? NightStayId = null,
+        Guid? CheckupFeeVisitId = null);
 }
