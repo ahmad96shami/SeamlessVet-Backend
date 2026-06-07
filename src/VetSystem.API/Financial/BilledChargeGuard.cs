@@ -5,8 +5,8 @@ using VetSystem.Infrastructure.Persistence;
 namespace VetSystem.API.Financial;
 
 /// <summary>
-/// "Billed" is derived state: an invoice item's <c>prescription_id</c> / <c>procedure_id</c>
-/// back-link IS the record that the charge was billed (no flag to drift). Once referenced, the
+/// "Billed" is derived state: an invoice item's <c>prescription_id</c> / <c>procedure_id</c> /
+/// <c>vaccination_id</c> back-link IS the record that the charge was billed (no flag to drift). Once referenced, the
 /// clinical row backing an invoice line must stay intact — deleting it (or rewriting its money
 /// fields) would orphan the back-link and let the visit's record disagree with the issued,
 /// append-only invoice. Shared by the REST services and the <c>/sync</c> handlers so the rule
@@ -33,6 +33,17 @@ internal static class BilledChargeGuard
         {
             throw new ConflictException("procedure_billed",
                 $"Procedure '{procedureId}' is billed on an invoice and can no longer be removed or re-priced.");
+        }
+    }
+
+    public static async Task EnsureVaccinationNotBilledAsync(
+        ApplicationDbContext db, Guid vaccinationId, CancellationToken cancellationToken)
+    {
+        if (await db.InvoiceItems.AsNoTracking()
+                .AnyAsync(it => it.VaccinationId == vaccinationId, cancellationToken))
+        {
+            throw new ConflictException("vaccination_billed",
+                $"Vaccination '{vaccinationId}' is billed on an invoice and can no longer be removed or re-priced.");
         }
     }
 }

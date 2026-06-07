@@ -1,5 +1,6 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Application.Vaccinations.Contracts;
 using VetSystem.Domain.Common;
@@ -107,6 +108,16 @@ public sealed class VaccinationsService
             await RequireExistsAsync(_db.Visits.AnyAsync(v => v.Id == visitId, cancellationToken), "visit", visitId);
         }
 
+        // M22 — catalog-linked (billable) vaccination: price snapshots at recording time,
+        // defaulting to the catalog price (mirrors ProceduresService.CreateAsync). Existence is
+        // checked through the env-scoped query filter even when the request carries its own price.
+        if (request.ServiceId is { } svcId)
+        {
+            await RequireExistsAsync(_db.Services.AnyAsync(s => s.Id == svcId, cancellationToken), "service", svcId);
+        }
+
+        var price = request.Price ?? await ResolveDefaultPriceAsync(request.ServiceId, cancellationToken);
+
         if (request.Id is { } id && id != Guid.Empty)
         {
             var collision = await _db.Vaccinations.IgnoreQueryFilters().AnyAsync(v => v.Id == id, cancellationToken);
@@ -123,7 +134,9 @@ public sealed class VaccinationsService
             PetId = request.PetId,
             CustomerId = request.CustomerId,
             VisitId = request.VisitId,
+            ServiceId = request.ServiceId,
             VaccineType = request.VaccineType,
+            Price = price,
             DateGiven = request.DateGiven,
             NextDueDate = request.NextDueDate,
             CertificateUrl = request.CertificateUrl,
@@ -140,7 +153,23 @@ public sealed class VaccinationsService
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException("vaccination", id);
 
+        // M22 (BilledChargeGuard) — once an invoice line bills this vaccination, its money/identity
+        // fields are frozen — change-detected so date/certificate-only patches still apply.
+        var changesService = request.ServiceId.HasValue && request.ServiceId != vaccination.ServiceId;
+        var changesPrice = request.Price.HasValue && request.Price != vaccination.Price;
+        if (changesService || changesPrice)
+        {
+            await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
+        }
+
+        if (request.ServiceId is { } serviceId)
+        {
+            await RequireExistsAsync(_db.Services.AnyAsync(s => s.Id == serviceId, cancellationToken), "service", serviceId);
+            vaccination.ServiceId = serviceId;
+        }
+
         if (request.VaccineType is not null) vaccination.VaccineType = request.VaccineType;
+        if (request.Price.HasValue) vaccination.Price = request.Price;
         if (request.DateGiven.HasValue) vaccination.DateGiven = request.DateGiven.Value;
         if (request.NextDueDate.HasValue) vaccination.NextDueDate = request.NextDueDate;
         if (request.CertificateUrl is not null) vaccination.CertificateUrl = request.CertificateUrl;
@@ -154,8 +183,24 @@ public sealed class VaccinationsService
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException("vaccination", id);
 
+        // M22 — a billed vaccination backs an invoice line (BilledChargeGuard).
+        await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
+
         _db.Vaccinations.Remove(vaccination);
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>No catalog vaccine → no price (legacy free-text rows stay records-only, never 0-priced).</summary>
+    private async Task<decimal?> ResolveDefaultPriceAsync(Guid? serviceId, CancellationToken cancellationToken)
+    {
+        if (serviceId is not { } sid)
+        {
+            return null;
+        }
+
+        var service = await _db.Services.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, cancellationToken)
+                      ?? throw new NotFoundException("service", sid);
+        return service.DefaultPrice;
     }
 
     private static async Task RequireExistsAsync(Task<bool> existsQuery, string entity, Guid id)

@@ -19,6 +19,8 @@ public sealed class VaccinationCreateRequestValidator : AbstractValidator<Vaccin
             .GreaterThanOrEqualTo(r => r.DateGiven)
             .WithMessage("NextDueDate must be on or after DateGiven.")
             .When(r => r.NextDueDate.HasValue);
+
+        RuleFor(r => r.Price!.Value).GreaterThanOrEqualTo(0m).When(r => r.Price.HasValue);
     }
 }
 
@@ -28,5 +30,6 @@ public sealed class VaccinationPatchRequestValidator : AbstractValidator<Vaccina
     {
         RuleFor(r => r.VaccineType!).NotEmpty().MaximumLength(128).When(r => r.VaccineType is not null);
         RuleFor(r => r.DateGiven!.Value).NotEqual(default(DateOnly)).When(r => r.DateGiven.HasValue);
+        RuleFor(r => r.Price!.Value).GreaterThanOrEqualTo(0m).When(r => r.Price.HasValue);
     }
 }

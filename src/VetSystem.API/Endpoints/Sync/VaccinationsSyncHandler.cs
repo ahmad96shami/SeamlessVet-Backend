@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -10,6 +11,8 @@ namespace VetSystem.API.Endpoints.Sync;
 /// <summary>
 /// <c>/sync/vaccinations</c> (M5 task 19). Targets a pet or a farm-group customer (at least one);
 /// persists the device record, validating referenced rows exist in the actor's environment.
+/// M22: accepts the catalog link (<c>service_id</c>, billable) + <c>price</c> snapshot; billed
+/// vaccinations are frozen like billed procedures (BilledChargeGuard).
 /// </summary>
 public sealed class VaccinationsSyncHandler : ISyncTableHandler
 {
@@ -66,13 +69,27 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
             throw new ConflictException("invalid_next_due_date", "next_due_date must be on or after date_given.");
         }
 
+        // M22 — optional catalog link; price defaults to the catalog price when omitted.
+        var serviceId = SyncBody.OptionalGuid(body, "service_id");
+        var price = SyncBody.OptionalDecimal(body, "price");
+        if (serviceId is { } svc)
+        {
+            var defaultPrice = await _db.Services.AsNoTracking()
+                                   .Where(s => s.Id == svc).Select(s => (decimal?)s.DefaultPrice)
+                                   .FirstOrDefaultAsync(cancellationToken)
+                               ?? throw new NotFoundException("service", svc);
+            price ??= defaultPrice;
+        }
+
         var vaccination = new Vaccination
         {
             Id = id,
             PetId = petId,
             CustomerId = customerId,
             VisitId = visitId,
+            ServiceId = serviceId,
             VaccineType = SyncBody.RequireString(body, "vaccine_type"),
+            Price = price,
             DateGiven = dateGiven,
             NextDueDate = nextDueDate,
             CertificateUrl = SyncBody.OptionalString(body, "certificate_url"),
@@ -88,6 +105,30 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
         RequireAuthenticated();
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException(TableName, id);
+
+        // Mirror the REST rule (BilledChargeGuard): once an invoice line bills this vaccination,
+        // its money/identity fields are frozen — change-detected so date/certificate patches apply.
+        var incomingServiceId = body.TryGetProperty("service_id", out _)
+            ? SyncBody.OptionalGuid(body, "service_id")
+            : vaccination.ServiceId;
+        var incomingPrice = body.TryGetProperty("price", out _)
+            ? SyncBody.OptionalDecimal(body, "price")
+            : vaccination.Price;
+        if (incomingServiceId != vaccination.ServiceId || incomingPrice != vaccination.Price)
+        {
+            await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
+        }
+
+        if (body.TryGetProperty("service_id", out _))
+        {
+            var serviceId = SyncBody.OptionalGuid(body, "service_id");
+            if (serviceId is { } sid)
+            {
+                await EnsureExistsAsync(_db.Services.AnyAsync(s => s.Id == sid, cancellationToken), "service", sid);
+            }
+            vaccination.ServiceId = serviceId;
+        }
+        if (body.TryGetProperty("price", out _)) vaccination.Price = SyncBody.OptionalDecimal(body, "price");
 
         if (SyncBody.TryGetString(body, "vaccine_type", out var vt) && vt is not null) vaccination.VaccineType = vt;
         if (body.TryGetProperty("date_given", out _))
@@ -112,6 +153,9 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
         RequireAuthenticated();
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException(TableName, id);
+
+        // Mirror the REST rule (BilledChargeGuard): a billed vaccination backs an invoice line.
+        await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
 
         _db.Vaccinations.Remove(vaccination);
         await _db.SaveChangesAsync(cancellationToken);
