@@ -61,4 +61,5 @@ public sealed record BatchResponse(
     decimal? DoctorShareCeiling,
     string Status,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? SettledAt = null);

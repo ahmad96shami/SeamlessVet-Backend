@@ -68,7 +68,18 @@ public sealed class BatchesService
             .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
             .ToListAsync(cancellationToken);
 
-        return rows.Select(_mapper.Map<BatchResponse>).ToList();
+        // M24 — surface "settled" so the web can route closed-but-unsettled cycles into the settle flow.
+        var ids = rows.Select(b => b.Id).ToList();
+        var settledAt = await _db.BatchSettlements.AsNoTracking()
+            .Where(s => ids.Contains(s.BatchId))
+            .ToDictionaryAsync(s => s.BatchId, s => s.SettledAt, cancellationToken);
+
+        return rows
+            .Select(b => _mapper.Map<BatchResponse>(b) with
+            {
+                SettledAt = settledAt.TryGetValue(b.Id, out var at) ? at : null,
+            })
+            .ToList();
     }
 
     public async Task<BatchResponse> GetAsync(Guid id, CancellationToken cancellationToken)
@@ -76,7 +87,12 @@ public sealed class BatchesService
         var batch = await _db.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
                     ?? throw new NotFoundException("batch", id);
 
-        return _mapper.Map<BatchResponse>(batch);
+        var settledAt = await _db.BatchSettlements.AsNoTracking()
+            .Where(s => s.BatchId == id)
+            .Select(s => (DateTimeOffset?)s.SettledAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return _mapper.Map<BatchResponse>(batch) with { SettledAt = settledAt };
     }
 
     public async Task<BatchResponse> CreateAsync(BatchCreateRequest request, CancellationToken cancellationToken)

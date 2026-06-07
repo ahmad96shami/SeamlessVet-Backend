@@ -187,6 +187,7 @@ builder.Services.AddScoped<VetSystem.API.Contracts.ContractsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractMedicationPricesService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractFarmsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
+builder.Services.AddScoped<VetSystem.API.Contracts.BatchSettlementService>(); // M24 — تصفية الدورة
 
 // M9 — doctor entitlements & settlement lock. The fee-model + System A/B calculators and the toggle
 // resolver are pure (no state), registered as singletons; the four IExamFeeCalculator impls are

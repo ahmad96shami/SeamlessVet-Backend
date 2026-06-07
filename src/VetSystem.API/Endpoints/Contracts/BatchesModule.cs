@@ -40,6 +40,18 @@ public sealed class BatchesModule : IEndpointModule
             .RequirePermission(PermissionKey.ContractsActivate)
             .AddEndpointFilter(new IdempotencyKeyFilter(EntityType))
             .WithName("Batches_Delete");
+
+        // M24 — batch settlement (تصفية الدورة). Settling is the financial confirm that closes the
+        // cycle (re-priced lines + discount land as ledger adjustments, entitlement recomputed), so
+        // it carries the same gate as the other batch writes. Reads are auth-only like the rest.
+        group.MapGet("/{id:guid}/settlement/preview", Preview).WithName("Batches_SettlementPreview");
+        group.MapGet("/{id:guid}/settlement", GetSettlement).WithName("Batches_GetSettlement");
+
+        group.MapPost("/{id:guid}/settle", Settle)
+            .RequirePermission(PermissionKey.ContractsActivate)
+            .AddEndpointFilter<ValidationFilter<BatchSettlementRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("batch_settlement"))
+            .WithName("Batches_Settle");
     }
 
     private static async Task<IResult> List(
@@ -80,5 +92,26 @@ public sealed class BatchesModule : IEndpointModule
     {
         await svc.DeleteAsync(id, cancellationToken);
         return TypedResults.NoContent();
+    }
+
+    private static async Task<IResult> Preview(
+        Guid id, BatchSettlementService svc, CancellationToken cancellationToken)
+    {
+        var preview = await svc.PreviewAsync(id, cancellationToken);
+        return TypedResults.Ok(preview);
+    }
+
+    private static async Task<IResult> GetSettlement(
+        Guid id, BatchSettlementService svc, CancellationToken cancellationToken)
+    {
+        var settlement = await svc.GetAsync(id, cancellationToken);
+        return TypedResults.Ok(settlement);
+    }
+
+    private static async Task<IResult> Settle(
+        Guid id, BatchSettlementRequest request, BatchSettlementService svc, CancellationToken cancellationToken)
+    {
+        var settlement = await svc.SettleAsync(id, request, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(settlement.Id));
     }
 }
