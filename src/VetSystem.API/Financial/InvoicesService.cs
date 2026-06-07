@@ -376,12 +376,19 @@ public sealed class InvoicesService
         var lines = new List<ResolvedLine>();
         foreach (var item in requestItems)
         {
-            lines.Add(await ResolveExplicitLineAsync(item, customerId, pricingAsOf, applyContractPricing, cancellationToken));
+            lines.Add(await ResolveExplicitLineAsync(item, customerId, visit, pricingAsOf, applyContractPricing, cancellationToken));
         }
 
         if (visit is not null)
         {
-            lines.AddRange(await AssembleVisitLinesAsync(visit, customerId, pricingAsOf, applyContractPricing, cancellationToken));
+            // Charges the client already sent as explicit back-linked lines (price/discount edited
+            // at the till) must not auto-assemble a second time.
+            var explicitRx = requestItems
+                .Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToHashSet();
+            var explicitProcedures = requestItems
+                .Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToHashSet();
+            lines.AddRange(await AssembleVisitLinesAsync(
+                visit, customerId, pricingAsOf, applyContractPricing, explicitRx, explicitProcedures, cancellationToken));
         }
 
         if (lines.Count == 0)
@@ -561,10 +568,87 @@ public sealed class InvoicesService
     private async Task<ResolvedLine> ResolveExplicitLineAsync(
         InvoiceLineRequest item,
         Guid? customerId,
+        Visit? visit,
         DateOnly pricingAsOf,
         bool applyContractPricing,
         CancellationToken cancellationToken)
     {
+        var quantity = item.Quantity;
+        decimal? procedurePrice = null;
+
+        // Back-linked visit charges (the POS presents them as locked-quantity cart lines so the
+        // cashier can adjust price/discount): the clinical record stays authoritative for WHAT is
+        // billed and HOW MANY — the request quantity is ignored. Auto-assembly skips these ids.
+        if (item.PrescriptionId is { } rxId)
+        {
+            if (visit is null)
+            {
+                throw new ConflictException("line_backlink_requires_visit",
+                    "A prescription-linked line requires the invoice to be linked to its visit.");
+            }
+
+            var rx = await _db.Prescriptions.AsNoTracking()
+                         .FirstOrDefaultAsync(p => p.Id == rxId, cancellationToken)
+                     ?? throw new NotFoundException("prescription", rxId);
+            if (rx.VisitId != visit.Id)
+            {
+                throw new ConflictException("prescription_not_in_visit",
+                    $"Prescription '{rxId}' does not belong to visit '{visit.Id}'.");
+            }
+
+            if (rx.DispenseType != DispenseType.DispensedToOwner)
+            {
+                throw new ConflictException("prescription_not_billable",
+                    "Only dispensed_to_owner prescriptions are billable as invoice lines.");
+            }
+
+            if (rx.ProductId != item.ProductId)
+            {
+                throw new ConflictException("prescription_product_mismatch",
+                    "The line's product_id must match the prescription's product.");
+            }
+
+            if (await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.PrescriptionId == rxId, cancellationToken))
+            {
+                throw new ConflictException("prescription_already_billed",
+                    $"Prescription '{rxId}' is already billed on an invoice.");
+            }
+
+            quantity = rx.Quantity ?? 1m; // server-wins: quantity is edited on the visit, not at the till
+        }
+        else if (item.ProcedureId is { } procedureId)
+        {
+            if (visit is null)
+            {
+                throw new ConflictException("line_backlink_requires_visit",
+                    "A procedure-linked line requires the invoice to be linked to its visit.");
+            }
+
+            var procedure = await _db.Procedures.AsNoTracking()
+                                .FirstOrDefaultAsync(p => p.Id == procedureId, cancellationToken)
+                            ?? throw new NotFoundException("procedure", procedureId);
+            if (procedure.VisitId != visit.Id)
+            {
+                throw new ConflictException("procedure_not_in_visit",
+                    $"Procedure '{procedureId}' does not belong to visit '{visit.Id}'.");
+            }
+
+            if (procedure.ServiceId is null || procedure.ServiceId != item.ServiceId)
+            {
+                throw new ConflictException("procedure_service_mismatch",
+                    "The line's service_id must match the procedure's billable service.");
+            }
+
+            if (await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.ProcedureId == procedureId, cancellationToken))
+            {
+                throw new ConflictException("procedure_already_billed",
+                    $"Procedure '{procedureId}' is already billed on an invoice.");
+            }
+
+            quantity = 1m;                    // a procedure always bills as a single line
+            procedurePrice = procedure.Price; // the visit-set price, unless the request overrides it
+        }
+
         decimal unitPrice;
         decimal costPrice;
         string? description = item.Description;
@@ -585,12 +669,12 @@ public sealed class InvoicesService
             var serviceId = item.ServiceId!.Value;
             var service = await _db.Services.AsNoTracking().FirstOrDefaultAsync(s => s.Id == serviceId, cancellationToken)
                           ?? throw new NotFoundException("service", serviceId);
-            unitPrice = item.UnitPrice ?? service.DefaultPrice;
+            unitPrice = item.UnitPrice ?? procedurePrice ?? service.DefaultPrice;
             costPrice = 0m;
             description ??= service.NameAr;
         }
 
-        var lineTotal = Money(item.Quantity * unitPrice - item.DiscountAmount);
+        var lineTotal = Money(quantity * unitPrice - item.DiscountAmount);
         if (lineTotal < 0m)
         {
             throw new ConflictException("line_discount_exceeds_total",
@@ -598,21 +682,25 @@ public sealed class InvoicesService
         }
 
         return new ResolvedLine(
-            item.ProductId, item.ServiceId, description, item.Quantity, unitPrice, costPrice,
-            Money(item.DiscountAmount), lineTotal, PrescriptionId: null, ProcedureId: null);
+            item.ProductId, item.ServiceId, description, quantity, unitPrice, costPrice,
+            Money(item.DiscountAmount), lineTotal, item.PrescriptionId, item.ProcedureId);
     }
 
     /// <summary>
     /// Auto-assembles a visit's unbilled charges (M7 task 8): every <c>dispensed_to_owner</c>
-    /// prescription and every billable procedure that no existing invoice line already references.
-    /// On field invoices, dispensed-med lines bill at the contract-overridden price when one applies
-    /// (M8 task 10); procedures (services) are never contract-overridden and use the procedure price.
+    /// prescription and every billable procedure that no existing invoice line already references —
+    /// minus any the request already billed as explicit back-linked lines (the POS cart's editable
+    /// visit lines). On field invoices, dispensed-med lines bill at the contract-overridden price
+    /// when one applies (M8 task 10); procedures (services) are never contract-overridden and use
+    /// the procedure price.
     /// </summary>
     private async Task<List<ResolvedLine>> AssembleVisitLinesAsync(
         Visit visit,
         Guid? customerId,
         DateOnly pricingAsOf,
         bool applyContractPricing,
+        IReadOnlySet<Guid> excludePrescriptionIds,
+        IReadOnlySet<Guid> excludeProcedureIds,
         CancellationToken cancellationToken)
     {
         var lines = new List<ResolvedLine>();
@@ -629,6 +717,7 @@ public sealed class InvoicesService
                 .Select(it => it.PrescriptionId!.Value)
                 .ToListAsync(cancellationToken);
             var billedSet = billed.ToHashSet();
+            billedSet.UnionWith(excludePrescriptionIds);
 
             var productIds = dispensed.Select(p => p.ProductId).Distinct().ToList();
             var products = await _db.Products.AsNoTracking()
@@ -671,6 +760,7 @@ public sealed class InvoicesService
                 .Select(it => it.ProcedureId!.Value)
                 .ToListAsync(cancellationToken);
             var billedProcSet = billedProc.ToHashSet();
+            billedProcSet.UnionWith(excludeProcedureIds);
 
             foreach (var procedure in procedures.Where(p => !billedProcSet.Contains(p.Id)))
             {

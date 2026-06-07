@@ -19,6 +19,32 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
         RuleFor(l => l.Quantity).GreaterThan(0m);
         RuleFor(l => l.UnitPrice!.Value).GreaterThanOrEqualTo(0m).When(l => l.UnitPrice.HasValue);
         RuleFor(l => l.DiscountAmount).GreaterThanOrEqualTo(0m);
+
+        // Visit-charge back-links: at most one, and it must agree with the line's catalog target
+        // (a prescription dispenses a product; a procedure performs a service).
+        RuleFor(l => l)
+            .Must(l => l.PrescriptionId is null || l.ProcedureId is null)
+            .WithMessage("A line may back-link a prescription or a procedure, not both.");
+        RuleFor(l => l.ProductId)
+            .NotNull()
+            .When(l => l.PrescriptionId is not null)
+            .WithMessage("A prescription-linked line must reference the prescription's product_id.");
+        RuleFor(l => l.ServiceId)
+            .NotNull()
+            .When(l => l.ProcedureId is not null)
+            .WithMessage("A procedure-linked line must reference the procedure's service_id.");
+    }
+}
+
+internal static class InvoiceLineRules
+{
+    /// <summary>No two lines may bill the same prescription / procedure (the already-billed check
+    /// in the service only sees committed invoices, not sibling lines of this request).</summary>
+    public static bool BackLinksAreDistinct(IReadOnlyList<InvoiceLineRequest> items)
+    {
+        var rx = items.Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToList();
+        var procedures = items.Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToList();
+        return rx.Distinct().Count() == rx.Count && procedures.Distinct().Count() == procedures.Count;
     }
 }
 
@@ -41,6 +67,9 @@ public sealed class PosInvoiceRequestValidator : AbstractValidator<PosInvoiceReq
         RuleFor(r => r.DiscountAmount).GreaterThanOrEqualTo(0m);
         RuleForEach(r => r.Items).SetValidator(new InvoiceLineRequestValidator());
         RuleForEach(r => r.Payments).SetValidator(new PaymentRequestValidator());
+        RuleFor(r => r.Items)
+            .Must(InvoiceLineRules.BackLinksAreDistinct)
+            .WithMessage("Each prescription/procedure may be billed by at most one line.");
 
         // A POS sale needs at least one explicit line, unless it is tied to a visit whose dispensed
         // meds / procedures the server will auto-assemble.
@@ -58,6 +87,9 @@ public sealed class FieldInvoiceRequestValidator : AbstractValidator<FieldInvoic
         RuleFor(r => r.DiscountAmount).GreaterThanOrEqualTo(0m);
         RuleForEach(r => r.Items).SetValidator(new InvoiceLineRequestValidator());
         RuleForEach(r => r.Payments).SetValidator(new PaymentRequestValidator());
+        RuleFor(r => r.Items)
+            .Must(InvoiceLineRules.BackLinksAreDistinct)
+            .WithMessage("Each prescription/procedure may be billed by at most one line.");
     }
 }
 

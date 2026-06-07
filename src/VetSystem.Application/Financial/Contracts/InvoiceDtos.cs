@@ -6,6 +6,13 @@ namespace VetSystem.Application.Financial.Contracts;
 /// <c>services.default_price</c>) — M8's pricing service later swaps in contract-overridden prices.
 /// <c>CostPrice</c> is never client-supplied here; the server snapshots it from the product at sale
 /// time (SCHEMA "Key invariants" #8).
+/// <para>
+/// A line may back-link one of the request visit's charges via <c>PrescriptionId</c> (with the
+/// matching <c>ProductId</c>) or <c>ProcedureId</c> (with the matching <c>ServiceId</c>) so the POS
+/// can present visit charges as editable cart lines (price/discount). The server then resolves the
+/// line from the clinical record — <b>quantity is server-authoritative</b> (the prescription's /
+/// 1 for a procedure; the client value is ignored) — and skips that charge during auto-assembly.
+/// </para>
 /// </summary>
 public sealed record InvoiceLineRequest(
     Guid? ProductId,
@@ -13,7 +20,9 @@ public sealed record InvoiceLineRequest(
     string? Description,
     decimal Quantity,
     decimal? UnitPrice,
-    decimal DiscountAmount = 0m);
+    decimal DiscountAmount = 0m,
+    Guid? PrescriptionId = null,
+    Guid? ProcedureId = null);
 
 /// <summary>
 /// A payment leg. Several may be sent for a mixed payment (PRD §5.4). M19: a <c>cheque</c> leg may

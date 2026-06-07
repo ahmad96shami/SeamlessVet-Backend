@@ -88,6 +88,60 @@ public sealed class InvoiceValidatorTests
         => Pos.Validate(Build(idempotencyKey: "")).IsValid.Should().BeFalse();
 
     [Fact]
+    public void Pos_BackLinkedLine_BothPrescriptionAndProcedure_Fails()
+    {
+        var req = Build(
+            [new InvoiceLineRequest(Guid.CreateVersion7(), null, null, 1m, 10m,
+                PrescriptionId: Guid.CreateVersion7(), ProcedureId: Guid.CreateVersion7())],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("a line back-links a prescription or a procedure, not both");
+    }
+
+    [Fact]
+    public void Pos_PrescriptionLinkOnServiceLine_Fails()
+    {
+        var req = Build(
+            [new InvoiceLineRequest(null, Guid.CreateVersion7(), null, 1m, 10m, PrescriptionId: Guid.CreateVersion7())],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("a prescription-linked line must carry the product, not a service");
+    }
+
+    [Fact]
+    public void Pos_ProcedureLinkOnProductLine_Fails()
+    {
+        var req = Build(
+            [new InvoiceLineRequest(Guid.CreateVersion7(), null, null, 1m, 10m, ProcedureId: Guid.CreateVersion7())],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("a procedure-linked line must carry the service, not a product");
+    }
+
+    [Fact]
+    public void Pos_DuplicateBackLinks_Fail()
+    {
+        var rxId = Guid.CreateVersion7();
+        var productId = Guid.CreateVersion7();
+        var req = Build(
+            [
+                new InvoiceLineRequest(productId, null, null, 1m, 10m, PrescriptionId: rxId),
+                new InvoiceLineRequest(productId, null, null, 1m, 10m, PrescriptionId: rxId),
+            ],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeFalse("each prescription may be billed by at most one line");
+    }
+
+    [Fact]
+    public void Pos_BackLinkedLines_WellFormed_Pass()
+    {
+        var req = Build(
+            [
+                new InvoiceLineRequest(Guid.CreateVersion7(), null, null, 1m, 10m, PrescriptionId: Guid.CreateVersion7()),
+                new InvoiceLineRequest(null, Guid.CreateVersion7(), null, 1m, 35m, ProcedureId: Guid.CreateVersion7()),
+            ],
+            visitId: Guid.CreateVersion7());
+        Pos.Validate(req).IsValid.Should().BeTrue();
+    }
+
+    [Fact]
     public void Voucher_Valid_Passes()
     {
         var req = new ReceiptVoucherRequest(Guid.CreateVersion7(), Guid.CreateVersion7(), null, 50m, "cash", null, "idem-1");

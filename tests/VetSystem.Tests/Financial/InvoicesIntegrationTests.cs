@@ -207,6 +207,120 @@ public sealed class InvoicesIntegrationTests
         stock.Should().Be(98m, "the dispensed med (qty 2) is deducted at issuance");
     }
 
+    [Fact]
+    public async Task Pos_BackLinkedVisitLines_HonourPriceAndDiscount_ServerWinsQuantity_NoDoubleAssembly()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var (_, productId) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+
+        var serviceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/admin/services", new { id = serviceId, nameAr = "فحص", category = "exam", defaultPrice = 40m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var procedureId = Guid.CreateVersion7();
+        (await PostAsync(client, "/procedures", new { id = procedureId, visitId, serviceId, price = 40m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var prescriptionId = Guid.CreateVersion7();
+        (await PostAsync(client, "/prescriptions", new { id = prescriptionId, visitId, productId, dispenseType = "dispensed_to_owner", quantity = 2m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // The POS cart sends the visit charges as explicit lines — price/discount adjusted at the
+        // till, quantity tampered with (5) to prove the server wins — plus one ad-hoc extra item.
+        var invoiceId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = invoiceId,
+            customerId,
+            visitId,
+            discountAmount = 0m,
+            items = new object[]
+            {
+                new { productId, prescriptionId, quantity = 5m, unitPrice = 22m, discountAmount = 4m },
+                new { serviceId, procedureId, quantity = 1m, unitPrice = 35m, discountAmount = 0m },
+                new { productId, quantity = 1m, discountAmount = 0m },
+            },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"backlink-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+
+        var items = await db.InvoiceItems.AsNoTracking().Where(it => it.InvoiceId == invoiceId).ToListAsync();
+        items.Should().HaveCount(3, "back-linked charges must not auto-assemble a second time");
+
+        var rxLine = items.Single(it => it.PrescriptionId == prescriptionId);
+        rxLine.Quantity.Should().Be(2m, "quantity is server-authoritative (the prescription's), not the request's 5");
+        rxLine.UnitPrice.Should().Be(22m, "the till's price adjustment is honoured");
+        rxLine.DiscountAmount.Should().Be(4m);
+        rxLine.LineTotal.Should().Be(40m, "2 × 22 − 4");
+
+        var procedureLine = items.Single(it => it.ProcedureId == procedureId);
+        procedureLine.Quantity.Should().Be(1m);
+        procedureLine.UnitPrice.Should().Be(35m, "the till's price adjustment is honoured over the procedure price");
+
+        items.Should().ContainSingle(it => it.PrescriptionId == null && it.ProcedureId == null,
+            "the ad-hoc extra line rides alongside the visit charges");
+
+        // A second invoice for the same visit assembles nothing — the charges are billed.
+        var secondId = Guid.CreateVersion7();
+        var second = await PostAsync(client, "/pos/invoices", new
+        {
+            id = secondId,
+            customerId,
+            visitId,
+            discountAmount = 0m,
+            items = Array.Empty<object>(),
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"backlink2-{secondId:N}",
+        });
+        second.StatusCode.Should().Be(HttpStatusCode.Conflict, "nothing left to bill on this visit");
+    }
+
+    [Fact]
+    public async Task Pos_BackLinkedLine_AlreadyBilled_Conflicts()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var (_, productId) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = Guid.CreateVersion7();
+        (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+        var prescriptionId = Guid.CreateVersion7();
+        (await PostAsync(client, "/prescriptions", new { id = prescriptionId, visitId, productId, dispenseType = "dispensed_to_owner", quantity = 1m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var firstId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = firstId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { productId, prescriptionId, quantity = 1m, discountAmount = 0m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"billed1-{firstId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var secondId = Guid.CreateVersion7();
+        var second = await PostAsync(client, "/pos/invoices", new
+        {
+            id = secondId, customerId, visitId, discountAmount = 0m,
+            items = new object[] { new { productId, prescriptionId, quantity = 1m, discountAmount = 0m } },
+            payments = Array.Empty<object>(),
+            idempotencyKey = $"billed2-{secondId:N}",
+        });
+        second.StatusCode.Should().Be(HttpStatusCode.Conflict, "a prescription can be billed once");
+    }
+
     // ---- helpers ----
 
     private static HttpClient AuthedClient(VetApiFactory factory, User admin)
