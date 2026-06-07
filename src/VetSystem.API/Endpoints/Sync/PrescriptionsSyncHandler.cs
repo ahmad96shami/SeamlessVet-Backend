@@ -63,6 +63,8 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
             Notes = SyncBody.OptionalString(body, "notes"),
             DispenseType = SyncBody.RequireString(body, "dispense_type", DispenseType.All, TableName),
             Quantity = SyncBody.OptionalDecimal(body, "quantity"),
+            // M23 — in-clinic billable toggle (only meaningful for administered_in_clinic).
+            Billable = SyncBody.OptionalBool(body, "billable") ?? false,
             // M18 reminder schedule (the device authors it; MedicationDueJob reads it). last_reminded_dose
             // is server-managed and never read from the payload.
             ReminderEnabled = SyncBody.OptionalBool(body, "reminder_enabled") ?? false,
@@ -84,13 +86,27 @@ public sealed class PrescriptionsSyncHandler : ISyncTableHandler
         var prescription = await _db.Prescriptions.FirstOrDefaultAsync(p => p.Id == id, cancellationToken)
                            ?? throw new NotFoundException(TableName, id);
 
-        // Advisory text + the M18 reminder schedule are editable — product/quantity/dispense_type are
-        // immutable post-create (they carry inventory/billing meaning that already flowed through
-        // separate sync writes). last_reminded_dose stays server-managed (never read from the payload).
+        // Advisory text, the M18 reminder schedule, and the M23 billable toggle are editable —
+        // product/quantity/dispense_type are immutable post-create (they carry inventory/billing
+        // meaning that already flowed through separate sync writes). last_reminded_dose stays
+        // server-managed (never read from the payload).
         if (SyncBody.TryGetString(body, "dosage", out var dosage)) prescription.Dosage = dosage;
         if (SyncBody.TryGetString(body, "frequency", out var freq)) prescription.Frequency = freq;
         if (SyncBody.TryGetString(body, "duration", out var dur)) prescription.Duration = dur;
         if (SyncBody.TryGetString(body, "notes", out var notes)) prescription.Notes = notes;
+
+        // M23 — billable may flip until an invoice line bills the row (mirror the REST rule).
+        if (SyncBody.OptionalBool(body, "billable") is { } billable && billable != prescription.Billable)
+        {
+            if (prescription.DispenseType != DispenseType.AdministeredInClinic)
+            {
+                throw new ConflictException("billable_in_clinic_only",
+                    "Only administered_in_clinic prescriptions carry the billable toggle.");
+            }
+
+            await BilledChargeGuard.EnsurePrescriptionNotBilledAsync(_db, id, cancellationToken);
+            prescription.Billable = billable;
+        }
 
         if (SyncBody.OptionalBool(body, "reminder_enabled") is { } reminderEnabled) prescription.ReminderEnabled = reminderEnabled;
         if (body.TryGetProperty("interval_minutes", out _)) prescription.IntervalMinutes = SyncBody.OptionalInt(body, "interval_minutes");

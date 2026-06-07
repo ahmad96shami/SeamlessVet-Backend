@@ -108,6 +108,8 @@ public sealed class PrescriptionsService
             Notes = request.Notes,
             DispenseType = request.DispenseType,
             Quantity = quantity,
+            // M23 — only meaningful for administered_in_clinic; dispensed_to_owner always bills.
+            Billable = request.DispenseType == DispenseType.AdministeredInClinic && request.Billable,
             ReminderEnabled = request.ReminderEnabled,
             IntervalMinutes = request.IntervalMinutes,
             LeadMinutes = request.LeadMinutes,
@@ -176,6 +178,20 @@ public sealed class PrescriptionsService
         if (request.Frequency is not null) rx.Frequency = request.Frequency;
         if (request.Duration is not null) rx.Duration = request.Duration;
         if (request.Notes is not null) rx.Notes = request.Notes;
+
+        // M23 — the in-clinic billable toggle is free until an invoice line bills the row
+        // (then flipping it would disagree with the issued, append-only invoice).
+        if (request.Billable is { } billable && billable != rx.Billable)
+        {
+            if (rx.DispenseType != DispenseType.AdministeredInClinic)
+            {
+                throw new ConflictException("billable_in_clinic_only",
+                    "Only administered_in_clinic prescriptions carry the billable toggle.");
+            }
+
+            await BilledChargeGuard.EnsurePrescriptionNotBilledAsync(_db, id, cancellationToken);
+            rx.Billable = billable;
+        }
 
         // M18 reminder schedule — toggle/retune. Dose numbering anchors (start/interval) can change too;
         // the job's high-water mark only advances, so a mid-course edit never re-fires a past dose.

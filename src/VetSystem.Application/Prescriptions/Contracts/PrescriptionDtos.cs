@@ -22,6 +22,9 @@ public sealed record PrescriptionCreateRequest(
     string? Notes,
     string DispenseType,
     decimal? Quantity,
+    // M23 — charge an administered_in_clinic med to the customer (assembles into the visit's
+    // invoice; stock already moved at recording). Ignored for dispensed_to_owner (always bills).
+    bool Billable = false,
     bool ReminderEnabled = false,
     int? IntervalMinutes = null,
     int? LeadMinutes = null,
@@ -34,13 +37,15 @@ public sealed record PrescriptionCreateRequest(
 /// immutable after create because <c>administered_in_clinic</c> already moved inventory — a change
 /// there would desync the append-only ledger of movements. Correct stock with a compensating movement
 /// instead. The reminder schedule may be toggled/retuned freely; changing the dose anchors mid-course
-/// never double-sends (the job's dose high-water mark only ever advances).
+/// never double-sends (the job's dose high-water mark only ever advances). M23 — <c>Billable</c>
+/// may be toggled until the prescription is billed on an invoice.
 /// </summary>
 public sealed record PrescriptionPatchRequest(
     string? Dosage,
     string? Frequency,
     string? Duration,
     string? Notes,
+    bool? Billable = null,
     bool? ReminderEnabled = null,
     int? IntervalMinutes = null,
     int? LeadMinutes = null,
@@ -58,6 +63,7 @@ public sealed record PrescriptionResponse(
     string? Notes,
     string DispenseType,
     decimal? Quantity,
+    bool Billable,
     bool ReminderEnabled,
     int? IntervalMinutes,
     int? LeadMinutes,
