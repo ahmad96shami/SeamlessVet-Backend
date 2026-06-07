@@ -1,5 +1,6 @@
 using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Application.Ledgers;
 using VetSystem.Application.Ledgers.Contracts;
@@ -226,7 +227,14 @@ public sealed class VisitsService
         if (request.Severity is not null) visit.Severity = request.Severity;
         if (request.IcdVetCode is not null) visit.IcdVetCode = request.IcdVetCode;
         if (request.ExamFeeApplied.HasValue) visit.ExamFeeApplied = request.ExamFeeApplied;
-        if (request.CheckupFeeApplied.HasValue) visit.CheckupFeeApplied = request.CheckupFeeApplied;
+
+        // M23 — the checkup fee is re-priceable until billed (invoice line or completion backstop);
+        // after that the visit's record must keep agreeing with the issued, append-only charge.
+        if (request.CheckupFeeApplied.HasValue && request.CheckupFeeApplied != visit.CheckupFeeApplied)
+        {
+            await BilledChargeGuard.EnsureCheckupFeeNotBilledAsync(_db, visit.Id, cancellationToken);
+            visit.CheckupFeeApplied = request.CheckupFeeApplied;
+        }
 
         await _db.SaveChangesAsync(cancellationToken);
         return _mapper.Map<VisitResponse>(visit);
