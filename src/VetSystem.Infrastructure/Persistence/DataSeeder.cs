@@ -63,6 +63,7 @@ public sealed class DataSeeder
             await SeedRolePermissionDefaultsAsync(env.Id, cancellationToken);
             await SeedSystemSettingsAsync(env.Id, cancellationToken);
             await SeedWarehouseAsync(env.Id, cancellationToken);
+            await SeedSystemServicesAsync(env.Id, cancellationToken);
         }
 
         await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
@@ -224,6 +225,42 @@ public sealed class DataSeeder
 
         await _db.SaveChangesAsync(cancellationToken);
         _logger.LogInformation("Seeded default system_settings row for environment {EnvironmentId}", environmentId);
+    }
+
+    private async Task SeedSystemServicesAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        // M23 — the checkup-fee / night-stay system services back the invoice lines for visit-care
+        // charges (invoice_items is product-XOR-service). Issuance also find-or-creates them on
+        // demand (API SystemServices), so this is convenience for fresh environments, not a gate.
+        var seeds = new (string Category, string NameAr)[]
+        {
+            (ServiceCategories.Checkup, "رسوم الكشف"),
+            (ServiceCategories.NightStay, "مبيت"),
+        };
+
+        foreach (var (category, nameAr) in seeds)
+        {
+            var exists = await _db.Services
+                .IgnoreQueryFilters()
+                .AnyAsync(s => s.EnvironmentId == environmentId && s.Category == category && s.DeletedAt == null,
+                    cancellationToken);
+            if (exists)
+            {
+                continue;
+            }
+
+            _db.Services.Add(new Service
+            {
+                EnvironmentId = environmentId,
+                NameAr = nameAr,
+                Category = category,
+                DefaultPrice = 0m,
+            });
+
+            await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Seeded system service {Category} for environment {EnvironmentId}", category, environmentId);
+        }
     }
 
     private async Task SeedWarehouseAsync(Guid environmentId, CancellationToken cancellationToken)
