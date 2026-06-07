@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Financial;
 using VetSystem.Application.Common;
 using VetSystem.Application.Settings;
 using VetSystem.Domain.Common;
@@ -82,10 +83,13 @@ public sealed class NightStaysSyncHandler : ISyncTableHandler
 
         RejectCheckOut(body);
 
+        // M23 — REST allows closed-unbilled edits (with recompute); sync stays conservative: closing
+        // is online-only, so a device never legitimately holds a closed stay to edit. Editing a
+        // closed row here would also need the nights/total recompute this handler doesn't carry.
         if (entry.CheckOutAt is not null)
         {
             throw new ConflictException("night_stay_closed",
-                "A closed (charged) night stay can't be edited via sync; post a ledger adjustment instead.");
+                "A closed night stay can't be edited via sync; use the online night-stay endpoints.");
         }
 
         if (body.TryGetProperty("care_type", out _))
@@ -113,11 +117,9 @@ public sealed class NightStaysSyncHandler : ISyncTableHandler
         var entry = await _db.NightStays.FirstOrDefaultAsync(n => n.Id == id, cancellationToken)
                     ?? throw new NotFoundException(TableName, id);
 
-        if (entry.CheckOutAt is not null)
-        {
-            throw new ConflictException("night_stay_closed",
-                "A closed (charged) night stay can't be deleted; post a ledger adjustment instead.");
-        }
+        // M23 — deletable until billed (mirror the REST rule): the billed state, not the closed
+        // state, is what backs an invoice line / posted backstop charge.
+        await BilledChargeGuard.EnsureNightStayNotBilledAsync(_db, id, cancellationToken);
 
         _db.NightStays.Remove(entry);
         await _db.SaveChangesAsync(cancellationToken);

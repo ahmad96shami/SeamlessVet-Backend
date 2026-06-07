@@ -46,4 +46,51 @@ internal static class BilledChargeGuard
                 $"Vaccination '{vaccinationId}' is billed on an invoice and can no longer be removed or re-priced.");
         }
     }
+
+    /// <summary>
+    /// M23 — night stays have TWO possible billing writers: a POS invoice line (back-link) and the
+    /// visit-completion ledger backstop (idempotency key <c>night-stay-{id}</c>). Either one freezes
+    /// the stay's billing fields.
+    /// </summary>
+    public static async Task EnsureNightStayNotBilledAsync(
+        ApplicationDbContext db, Guid nightStayId, CancellationToken cancellationToken)
+    {
+        var billed = await db.InvoiceItems.AsNoTracking()
+            .AnyAsync(it => it.NightStayId == nightStayId, cancellationToken);
+        if (!billed)
+        {
+            var key = $"night-stay-{nightStayId}";
+            billed = await db.LedgerEntries.AsNoTracking()
+                .AnyAsync(e => e.IdempotencyKey == key, cancellationToken);
+        }
+
+        if (billed)
+        {
+            throw new ConflictException("night_stay_billed",
+                $"Night stay '{nightStayId}' is billed (invoice line or completion backstop) and can no longer be changed or removed.");
+        }
+    }
+
+    /// <summary>
+    /// M23 — same two-writer rule for the visit's checkup fee (invoice back-link or the
+    /// <c>checkup-{visitId}</c> completion backstop). A billed fee can no longer be re-priced.
+    /// </summary>
+    public static async Task EnsureCheckupFeeNotBilledAsync(
+        ApplicationDbContext db, Guid visitId, CancellationToken cancellationToken)
+    {
+        var billed = await db.InvoiceItems.AsNoTracking()
+            .AnyAsync(it => it.CheckupFeeVisitId == visitId, cancellationToken);
+        if (!billed)
+        {
+            var key = $"checkup-{visitId}";
+            billed = await db.LedgerEntries.AsNoTracking()
+                .AnyAsync(e => e.IdempotencyKey == key, cancellationToken);
+        }
+
+        if (billed)
+        {
+            throw new ConflictException("checkup_fee_billed",
+                $"The checkup fee of visit '{visitId}' is billed (invoice line or completion backstop) and can no longer be changed.");
+        }
+    }
 }
