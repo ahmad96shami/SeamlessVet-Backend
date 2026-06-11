@@ -190,6 +190,10 @@ public sealed class InventoryService : IInventoryService
                 InvoiceId = intent.InvoiceId,
                 PurchaseInvoiceId = intent.PurchaseInvoiceId,
                 LotId = movementLotId,
+                // M27 — snapshot the consumed FEFO cost on an internal-use consume movement so the
+                // consumables report can value it (qty × unit_cost) without re-deriving lots; the
+                // leg is always a single deduction so resolvedUnitCost is its weighted-average cost.
+                UnitCost = intent.MovementType == MovementType.Consume ? resolvedUnitCost : null,
                 PerformedBy = userId,
                 IdempotencyKey = i == 0 ? intent.IdempotencyKey : $"{intent.IdempotencyKey}{SecondLegSuffix}",
             };

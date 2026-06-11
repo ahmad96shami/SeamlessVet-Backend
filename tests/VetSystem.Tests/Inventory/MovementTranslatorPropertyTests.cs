@@ -45,14 +45,16 @@ public sealed class MovementTranslatorPropertyTests
     [Fact]
     public void SingleLegMovements_CarryTheExpectedSignedDelta()
     {
-        var singleTypes = Gen.OneOfConst(MovementType.Receive, MovementType.ReturnAdd, MovementType.SaleDeduct);
+        var singleTypes = Gen.OneOfConst(
+            MovementType.Receive, MovementType.ReturnAdd, MovementType.SaleDeduct, MovementType.Consume);
 
         Gen.Select(singleTypes, PositiveQuantity).Sample((type, quantity) =>
         {
             var legs = Translator.Translate(BuildSingle(type, quantity));
 
             legs.Should().HaveCount(1);
-            var expected = type == MovementType.SaleDeduct ? -quantity : quantity;
+            var leaves = type is MovementType.SaleDeduct or MovementType.Consume;
+            var expected = leaves ? -quantity : quantity;
             legs[0].SignedDelta.Should().Be(expected);
             AssertAffectedMatchesSign(legs[0]);
         });
@@ -98,7 +100,7 @@ public sealed class MovementTranslatorPropertyTests
 
     private static MovementIntent BuildSingle(string type, decimal quantity) => type switch
     {
-        MovementType.SaleDeduct => new MovementIntent(null, type, Guid.NewGuid(), quantity,
+        MovementType.SaleDeduct or MovementType.Consume => new MovementIntent(null, type, Guid.NewGuid(), quantity,
             StockLocation.Warehouse, Guid.NewGuid(), null, null, "k"),
         _ => new MovementIntent(null, type, Guid.NewGuid(), quantity,
             null, null, StockLocation.Warehouse, Guid.NewGuid(), "k"),

@@ -50,6 +50,7 @@ public sealed class MovementTranslator : IMovementTranslator
             MovementType.Receive => Receive(intent),
             MovementType.ReturnAdd => ReturnAdd(intent),
             MovementType.SaleDeduct => SaleDeduct(intent),
+            MovementType.Consume => Consume(intent),
             MovementType.Adjust => Adjust(intent),
             MovementType.LoadToField => LoadToField(intent),
             MovementType.UnloadFromField => UnloadFromField(intent),
@@ -74,6 +75,15 @@ public sealed class MovementTranslator : IMovementTranslator
 
     private static IReadOnlyList<PlannedMovementLeg> SaleDeduct(MovementIntent intent)
     {
+        RequirePositive(intent.Quantity, intent.MovementType);
+        var (fromType, fromId) = RequireLocation(intent.FromLocationType, intent.FromLocationId, "from", intent.MovementType);
+        return [new PlannedMovementLeg(fromType, fromId, null, null, -intent.Quantity)];
+    }
+
+    private static IReadOnlyList<PlannedMovementLeg> Consume(MovementIntent intent)
+    {
+        // M27 — internal use of a consumable: one negative leg at a single location, FEFO-consumed
+        // like a sale (the affected-location rule, delta < 0 ⇒ from, then drives lot consumption).
         RequirePositive(intent.Quantity, intent.MovementType);
         var (fromType, fromId) = RequireLocation(intent.FromLocationType, intent.FromLocationId, "from", intent.MovementType);
         return [new PlannedMovementLeg(fromType, fromId, null, null, -intent.Quantity)];

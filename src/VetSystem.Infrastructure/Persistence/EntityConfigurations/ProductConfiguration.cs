@@ -22,6 +22,7 @@ internal sealed class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(p => p.UnitOfMeasure).HasColumnName("unit_of_measure").HasMaxLength(32);
         builder.Property(p => p.ExpirationDate).HasColumnName("expiration_date");
         builder.Property(p => p.ReorderPoint).HasColumnName("reorder_point").HasColumnType("numeric(14,3)");
+        builder.Property(p => p.IsConsumable).HasColumnName("is_consumable").HasDefaultValue(false);
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_products_category",

@@ -29,6 +29,15 @@ public sealed class Product : Entity
     public DateOnly? ExpirationDate { get; set; }
 
     public decimal ReorderPoint { get; set; }
+
+    /// <summary>
+    /// M27 — marks an internal-use consumable (gloves, syringes, …). A consumable is stocked,
+    /// received and FEFO-costed like any product, but is taken out of stock via a
+    /// <see cref="MovementType.Consume"/> movement (internal use, no sale) instead of being sold;
+    /// <c>POST /inventory/consume</c> rejects a non-consumable product. The consumables report sums
+    /// these movements (quantity + cost).
+    /// </summary>
+    public bool IsConsumable { get; set; }
 }
 
 public static class ProductCategory

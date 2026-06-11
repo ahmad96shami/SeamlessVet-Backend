@@ -17,7 +17,8 @@ public sealed record ProductRequest(
     decimal SellingPrice,
     string? UnitOfMeasure,
     DateOnly? ExpirationDate,
-    decimal ReorderPoint);
+    decimal ReorderPoint,
+    bool IsConsumable = false); // M27 — internal-use consumable flag
 
 public sealed record ProductPatchRequest(
     string? NameAr,
@@ -30,7 +31,8 @@ public sealed record ProductPatchRequest(
     decimal? SellingPrice,
     string? UnitOfMeasure,
     DateOnly? ExpirationDate,
-    decimal? ReorderPoint);
+    decimal? ReorderPoint,
+    bool? IsConsumable = null); // M27
 
 public sealed record ProductResponse(
     Guid Id,
@@ -45,5 +47,6 @@ public sealed record ProductResponse(
     string? UnitOfMeasure,
     DateOnly? ExpirationDate,
     decimal ReorderPoint,
+    bool IsConsumable, // M27
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);

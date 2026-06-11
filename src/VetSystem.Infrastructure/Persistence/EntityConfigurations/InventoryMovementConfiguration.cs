@@ -23,12 +23,13 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.Property(m => m.InvoiceId).HasColumnName("invoice_id");
         builder.Property(m => m.PurchaseInvoiceId).HasColumnName("purchase_invoice_id");
         builder.Property(m => m.LotId).HasColumnName("lot_id");
+        builder.Property(m => m.UnitCost).HasColumnName("unit_cost").HasColumnType("numeric(14,2)");
         builder.Property(m => m.PerformedBy).HasColumnName("performed_by").IsRequired();
         builder.Property(m => m.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_inventory_movements_type",
-            "movement_type IN ('receive','adjust','load_to_field','unload_from_field','sale_deduct','return_add')"));
+            "movement_type IN ('receive','adjust','load_to_field','unload_from_field','sale_deduct','return_add','consume')"));
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_inventory_movements_from_location_type",
             "from_location_type IS NULL OR from_location_type IN ('warehouse','field')"));

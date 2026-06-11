@@ -58,6 +58,28 @@ public sealed class MovementTranslatorTests
     }
 
     [Fact]
+    public void Consume_SubtractsFromLocation()
+    {
+        // M27 — internal-use consumption: one negative leg at the consuming location (mirrors a sale).
+        var legs = _translator.Translate(Intent(MovementType.Consume, 6m,
+            fromType: StockLocation.Warehouse, fromId: Warehouse));
+
+        legs.Should().ContainSingle();
+        legs[0].SignedDelta.Should().Be(-6m);
+        legs[0].AffectedLocationType.Should().Be(StockLocation.Warehouse);
+        legs[0].AffectedLocationId.Should().Be(Warehouse);
+        legs[0].ToLocationType.Should().BeNull();
+    }
+
+    [Fact]
+    public void Consume_WithoutFromLocation_IsRejected()
+    {
+        var act = () => _translator.Translate(Intent(MovementType.Consume, 6m));
+
+        act.Should().Throw<ConflictException>().Which.Code.Should().Be("invalid_location");
+    }
+
+    [Fact]
     public void Adjust_Positive_AddsToLocation()
     {
         var legs = _translator.Translate(Intent(MovementType.Adjust, 4m,
@@ -114,6 +136,7 @@ public sealed class MovementTranslatorTests
     [Theory]
     [InlineData(MovementType.Receive)]
     [InlineData(MovementType.SaleDeduct)]
+    [InlineData(MovementType.Consume)]
     [InlineData(MovementType.LoadToField)]
     public void NonPositiveQuantity_IsRejected(string movementType)
     {

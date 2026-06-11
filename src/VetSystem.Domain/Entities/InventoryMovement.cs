@@ -50,6 +50,12 @@ public sealed class InventoryMovement : Entity
     /// deduction); null when a deduction split across multiple lots (FEFO).</summary>
     public Guid? LotId { get; set; }
 
+    /// <summary>M27 — the FEFO weighted-average per-unit cost this leg consumed, snapshotted on a
+    /// <see cref="MovementType.Consume"/> movement so the consumables report values consumption
+    /// (qty × unit_cost) without re-deriving already-decremented lots. Null on every other movement
+    /// type (a sale's COGS still snapshots onto <c>invoice_items.cost_price</c>).</summary>
+    public decimal? UnitCost { get; set; }
+
     public Guid PerformedBy { get; set; }
 
     public string IdempotencyKey { get; set; } = string.Empty;
@@ -64,8 +70,14 @@ public static class MovementType
     public const string SaleDeduct = "sale_deduct";
     public const string ReturnAdd = "return_add";
 
+    /// <summary>M27 — internal-use consumption of a consumable (gloves, syringes, …): a single
+    /// negative-delta leg at one location that FEFO-consumes lots like a sale, but represents
+    /// internal use rather than a sale (no invoice). Carries the consumed FEFO cost on
+    /// <see cref="InventoryMovement.UnitCost"/> for the consumables report.</summary>
+    public const string Consume = "consume";
+
     public static readonly IReadOnlyCollection<string> All =
     [
-        Receive, Adjust, LoadToField, UnloadFromField, SaleDeduct, ReturnAdd,
+        Receive, Adjust, LoadToField, UnloadFromField, SaleDeduct, ReturnAdd, Consume,
     ];
 }

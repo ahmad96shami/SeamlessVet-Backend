@@ -103,6 +103,7 @@ public sealed class ProductsAdminService
             UnitOfMeasure = request.UnitOfMeasure,
             ExpirationDate = request.ExpirationDate,
             ReorderPoint = request.ReorderPoint,
+            IsConsumable = request.IsConsumable,
         };
 
         _db.Products.Add(entity);
@@ -138,6 +139,7 @@ public sealed class ProductsAdminService
         if (request.UnitOfMeasure is not null) entity.UnitOfMeasure = request.UnitOfMeasure;
         if (request.ExpirationDate.HasValue) entity.ExpirationDate = request.ExpirationDate;
         if (request.ReorderPoint.HasValue) entity.ReorderPoint = request.ReorderPoint.Value;
+        if (request.IsConsumable.HasValue) entity.IsConsumable = request.IsConsumable.Value;
 
         try
         {
