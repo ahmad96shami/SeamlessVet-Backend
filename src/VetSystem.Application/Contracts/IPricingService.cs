@@ -1,12 +1,12 @@
 namespace VetSystem.Application.Contracts;
 
 /// <summary>
-/// Resolves the sale unit price for a product at a point in time (M8 task 9, SCHEMA "Key invariants"
-/// #8): the contract-overridden price when an <c>active</c> contract for the customer — whose period
-/// covers <paramref name="asOf"/> — carries a <c>contract_medication_prices</c> row for the product;
-/// otherwise <c>products.selling_price</c>. While a contract is still <c>draft</c> it does not apply,
-/// so the same product bills at catalog price (PRD §6.6). Consumed by field-visit invoice creation
-/// (M7) and by M9's System-A drug-profit <c>sale_value</c> resolution.
+/// Resolves the sale unit price for a product at a point in time. Since M29 removed per-contract
+/// medication pricing, this is always <c>products.selling_price</c> — there is no longer a contract
+/// tier (negotiated overrides happen only at batch settlement, M24). The signature is preserved so
+/// the consumers (field-visit invoice creation, settlement preview) need not change; <paramref
+/// name="customerId"/> and <paramref name="asOf"/> no longer affect the result. Consumed by
+/// field-visit invoice creation (M7).
 /// </summary>
 public interface IPricingService
 {
@@ -15,8 +15,8 @@ public interface IPricingService
 }
 
 /// <summary>
-/// The resolved price plus its provenance. <see cref="IsContractPrice"/> is true (and
-/// <see cref="ContractId"/> set) when an active-contract override applied; false when the catalog
-/// selling price was used.
+/// The resolved price plus its provenance. Since M29 (per-contract pricing removed)
+/// <see cref="IsContractPrice"/> is always false and <see cref="ContractId"/> always null — the
+/// fields are retained so the call sites that branch on them keep compiling and provably bill catalog.
 /// </summary>
 public sealed record ResolvedUnitPrice(decimal UnitPrice, bool IsContractPrice, Guid? ContractId);

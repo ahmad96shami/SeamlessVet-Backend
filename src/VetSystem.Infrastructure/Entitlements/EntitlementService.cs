@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
-using VetSystem.Application.Contracts;
 using VetSystem.Application.Entitlements;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -13,7 +12,8 @@ namespace VetSystem.Infrastructure.Entitlements;
 /// Computes <see cref="DoctorEntitlement"/> rows (M9 task 8). The pure calculators (exam-fee models,
 /// System A, System B) and the toggle resolver do the arithmetic; this service supplies their inputs
 /// from the database — the batch config, its (non-void) invoices and line cost snapshots, and the
-/// contract-overridden <c>sale_value</c> via <see cref="IPricingService"/> (SCHEMA invariant #8).
+/// <c>sale_value</c> (the settled price where the batch is settled, else the billed line unit_price —
+/// M29 removed the contract-overridden tier; SCHEMA invariant #8).
 ///
 /// <para>Idempotent per source: one entitlement per batch / per visit. A re-run refreshes the figures
 /// on a still-<c>pending</c> row and is a no-op once the row is approved/paid (settled figures are
@@ -24,7 +24,6 @@ public sealed class EntitlementService : IEntitlementService
 {
     private readonly ApplicationDbContext _db;
     private readonly ICurrentUserAccessor _currentUser;
-    private readonly IPricingService _pricing;
     private readonly IExamFeeCalculatorFactory _examFees;
     private readonly IEntitlementToggleResolver _toggle;
     private readonly ISystemBDirectFeeCalculator _systemB;
@@ -32,14 +31,12 @@ public sealed class EntitlementService : IEntitlementService
     public EntitlementService(
         ApplicationDbContext db,
         ICurrentUserAccessor currentUser,
-        IPricingService pricing,
         IExamFeeCalculatorFactory examFees,
         IEntitlementToggleResolver toggle,
         ISystemBDirectFeeCalculator systemB)
     {
         _db = db;
         _currentUser = currentUser;
-        _pricing = pricing;
         _examFees = examFees;
         _toggle = toggle;
         _systemB = systemB;
@@ -80,24 +77,17 @@ public sealed class EntitlementService : IEntitlementService
 
         var revenue = effectiveInvoices.Values.Sum(i => i.Total) + (settlement?.RepricingDelta ?? 0m);
 
-        // sale_value (task 6 + M24): the settlement-line price where the batch is settled and the
-        // product has one, else the contract-overridden price where an active contract applies on the
-        // invoice date, else the line's snapshotted unit_price. cost is the line's cost_price snapshot.
+        // sale_value (M24 + M29): the settlement-line price where the batch is settled and the product
+        // has one, else the line's snapshotted unit_price. M29 removed per-contract medication pricing,
+        // so there is no longer a contract tier in between — the billed line price (itself catalog) is
+        // the fallback. cost is the line's cost_price snapshot.
         var drugProfit = 0m;
         var drugCost = 0m;
         foreach (var item in productItems)
         {
-            decimal saleValue;
-            if (settledPrices.TryGetValue(item.ProductId!.Value, out var settledPrice))
-            {
-                saleValue = settledPrice;
-            }
-            else
-            {
-                var asOf = DateOnly.FromDateTime(effectiveInvoices[item.InvoiceId].IssuedAt.UtcDateTime);
-                var resolved = await _pricing.ResolveUnitPriceAsync(item.ProductId!.Value, batch.CustomerId, asOf, cancellationToken);
-                saleValue = resolved.IsContractPrice ? resolved.UnitPrice : item.UnitPrice;
-            }
+            var saleValue = settledPrices.TryGetValue(item.ProductId!.Value, out var settledPrice)
+                ? settledPrice
+                : item.UnitPrice;
 
             drugProfit += (saleValue - item.CostPrice) * item.Quantity;
             drugCost += item.CostPrice * item.Quantity;

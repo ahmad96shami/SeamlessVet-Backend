@@ -12,8 +12,7 @@ namespace VetSystem.API.Endpoints.Sync;
 /// parent contract: while the contract is <c>draft</c> it is doctor-device authoritative (the doctor
 /// attaches farms offline while authoring); once the contract is <c>active</c>+ the coverage is
 /// server-authoritative and writes are rejected. The farm must belong to the contract's own customer,
-/// and the unique <c>(contract, farm)</c> pair is enforced. Mirrors
-/// <see cref="ContractMedicationPricesSyncHandler"/>.
+/// and the unique <c>(contract, farm)</c> pair is enforced.
 /// </summary>
 public sealed class ContractFarmsSyncHandler : ISyncTableHandler
 {

@@ -185,7 +185,6 @@ builder.Services.AddScoped<VetSystem.Application.Contracts.IContractLifecycleSer
 builder.Services.AddScoped<VetSystem.Application.Contracts.IPricingService,
     VetSystem.Infrastructure.Contracts.PricingService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractsService>();
-builder.Services.AddScoped<VetSystem.API.Contracts.ContractMedicationPricesService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.ContractFarmsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchSettlementService>(); // M24 — تصفية الدورة
@@ -307,7 +306,6 @@ builder.Services.AddScoped<ISyncTableHandler, InvoiceItemsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, PaymentsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ReceiptVouchersSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractsSyncHandler>();
-builder.Services.AddScoped<ISyncTableHandler, ContractMedicationPricesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, ContractFarmsSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, BatchesSyncHandler>();
 builder.Services.AddScoped<ISyncTableHandler, DoctorEntitlementsSyncHandler>();

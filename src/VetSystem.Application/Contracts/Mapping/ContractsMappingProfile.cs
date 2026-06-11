@@ -9,7 +9,6 @@ public sealed class ContractsMappingProfile : IRegister
     public void Register(TypeAdapterConfig config)
     {
         config.NewConfig<Contract, ContractResponse>();
-        config.NewConfig<ContractMedicationPrice, ContractMedicationPriceResponse>();
         config.NewConfig<ContractFarm, ContractFarmResponse>();
         config.NewConfig<Batch, BatchResponse>();
     }

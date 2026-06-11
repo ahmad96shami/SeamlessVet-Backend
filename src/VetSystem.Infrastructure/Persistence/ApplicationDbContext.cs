@@ -71,7 +71,6 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<SupplierPayment> SupplierPayments => Set<SupplierPayment>();
 
     public DbSet<Contract> Contracts => Set<Contract>();
-    public DbSet<ContractMedicationPrice> ContractMedicationPrices => Set<ContractMedicationPrice>();
     public DbSet<ContractFarm> ContractFarms => Set<ContractFarm>();
     public DbSet<Batch> Batches => Set<Batch>();
     public DbSet<BatchSettlement> BatchSettlements => Set<BatchSettlement>();

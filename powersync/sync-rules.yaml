@@ -109,9 +109,8 @@ streams:
       - SELECT * FROM inventory_movements  WHERE from_location_id IN (SELECT field_inventory_id FROM my_field_inventories) AND from_location_type = 'field' AND deleted_at IS NULL
       - SELECT * FROM inventory_movements  WHERE to_location_id   IN (SELECT field_inventory_id FROM my_field_inventories) AND to_location_type   = 'field' AND deleted_at IS NULL
 
-  # --- Per-medication price overrides + farm coverage for the doctor's contracts. ----------
+  # --- Farm coverage for the doctor's contracts (M29 removed per-medication price overrides). --
   by_contract:
     auto_subscribe: true
     queries:
-      - SELECT * FROM contract_medication_prices WHERE contract_id IN (SELECT contract_id FROM my_contracts) AND deleted_at IS NULL
-      - SELECT * FROM contract_farms             WHERE contract_id IN (SELECT contract_id FROM my_contracts) AND deleted_at IS NULL
+      - SELECT * FROM contract_farms WHERE contract_id IN (SELECT contract_id FROM my_contracts) AND deleted_at IS NULL

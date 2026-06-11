@@ -620,7 +620,6 @@ public sealed class DataSeeder
               receipt_vouchers,
               invoices,
               batches,
-              contract_medication_prices,
               contracts,
               attachments,
               vaccinations,

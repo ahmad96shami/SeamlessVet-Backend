@@ -12,9 +12,8 @@ namespace VetSystem.API.Contracts;
 /// Contract↔farm attachment (M15 task 7), nested under a contract. A contract covers one-or-more
 /// farms of the <b>same</b> owning customer (<see cref="Contract.CustomerId"/>); attaching a farm of a
 /// different customer is rejected. Mutations are allowed only while the parent contract is
-/// <c>draft</c> — once active its terms (including farm coverage) are server-authoritative and locked,
-/// mirroring <see cref="ContractMedicationPricesService"/>. The unique <c>(contract, farm)</c> pair is
-/// enforced.
+/// <c>draft</c> — once active its terms (including farm coverage) are server-authoritative and locked.
+/// The unique <c>(contract, farm)</c> pair is enforced.
 /// </summary>
 public sealed class ContractFarmsService
 {

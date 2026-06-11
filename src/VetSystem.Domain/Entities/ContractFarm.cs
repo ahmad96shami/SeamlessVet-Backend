@@ -7,8 +7,7 @@ namespace VetSystem.Domain.Entities;
 /// <see cref="Farm"/>s (M15). A contract covers one-or-more farms of the <b>same</b> customer
 /// (<see cref="Contract.CustomerId"/> stays the owning customer). The unique
 /// <c>(contract_id, farm_id)</c> pair is enforced. Authority follows the parent contract: writable
-/// while the contract is <c>draft</c> (doctor-device authoritative, like
-/// <see cref="ContractMedicationPrice"/>); locked once <c>active</c>+.
+/// while the contract is <c>draft</c> (doctor-device authoritative); locked once <c>active</c>+.
 /// </summary>
 public sealed class ContractFarm : Entity
 {
