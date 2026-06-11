@@ -31,7 +31,7 @@ public sealed class EntitlementSettlementIntegrationTests
 
         var customerId = await CreateCustomerAsync(client);
         var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m, sharePercent: 50m);
+            feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
         // Field visit → field invoice linked to the batch, paid in full (ledger nets to zero).
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
@@ -48,8 +48,9 @@ public sealed class EntitlementSettlementIntegrationTests
             entitlement.Status.Should().Be(EntitlementStatus.Pending);
             entitlement.CalculationSystem.Should().Be(EntitlementSystem.DrugProfit);
             entitlement.DoctorId.Should().Be(admin.Id);
-            // profit = (25 − 10) × 10 = 150; exam fee 20; share = 50% × (150 − 20) = 65.
-            entitlement.ComputedAmount.Should().Be(65m);
+            // M28 — the supervision fee IS the entitlement: fixed fee 20 ⇒ the doctor is owed 20 in full
+            // (drug profit (25 − 10) × 10 = 150 funds it from the clinic's margin under System A).
+            entitlement.ComputedAmount.Should().Be(20m);
             entitlementId = entitlement.Id;
         }
 
@@ -101,7 +102,6 @@ public sealed class EntitlementSettlementIntegrationTests
         var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.VisitId == visitId);
         entitlement.CalculationSystem.Should().Be(EntitlementSystem.DirectFee);
         entitlement.ComputedAmount.Should().Be(80m, "System B credits the full exam fee to the doctor");
-        entitlement.CeilingApplied.Should().BeNull();
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public sealed class EntitlementSettlementIntegrationTests
 
         var customerId = await CreateCustomerAsync(client);
         var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m, sharePercent: 50m);
+            feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
         // Sold on credit → the ledger carries a debt.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
@@ -144,7 +144,7 @@ public sealed class EntitlementSettlementIntegrationTests
 
         var customerId = await CreateCustomerAsync(client);
         var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m, sharePercent: 50m);
+            feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
         // 250 total, only 100 paid → 150 still outstanding.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
@@ -228,7 +228,7 @@ public sealed class EntitlementSettlementIntegrationTests
     }
 
     private static async Task<Guid> CreateBatchAsync(
-        HttpClient client, Guid customerId, Guid doctorId, string feeModel, decimal feeValue, decimal sharePercent)
+        HttpClient client, Guid customerId, Guid doctorId, string feeModel, decimal feeValue)
     {
         var batchId = Guid.CreateVersion7();
         (await PostAsync(client, "/batches", new
@@ -242,7 +242,6 @@ public sealed class EntitlementSettlementIntegrationTests
             supervisionFeeValue = feeValue,
             entitlementEnabled = true,
             entitlementSystem = "drug_profit",
-            doctorSharePercent = sharePercent,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
         return batchId;
     }

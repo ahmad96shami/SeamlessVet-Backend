@@ -132,11 +132,12 @@ public sealed class ReportExportTests
 
         yield return ("profit-per-batch", ReportDocuments.ProfitPerBatch(new ProfitPerBatchReportResponse(
             BatchId: Guid.NewGuid(), CustomerId: Guid.NewGuid(), DoctorId: Guid.NewGuid(),
-            EntitlementSystem: EntitlementSystem.DrugProfit, EntitlementEnabled: true,
-            Revenue: 5000m, DrugCost: 2000m, DrugProfit: 3000m, ExamFee: 200m, DoctorShare: 840m,
-            CeilingApplied: 840m, ClinicShare: 2160m, AsOf: To, DistributedToPartners: 2160m,
+            EntitlementSystem: EntitlementSystem.DirectFee, EntitlementEnabled: true,
+            Revenue: 5000m, DrugCost: 2000m, DrugProfit: 3000m, ExamFee: 200m, DoctorShare: 200m,
+            ClinicShare: 3000m, AsOf: To, DistributedToPartners: 3000m,
             RetainedByClinic: 0m,
-            PartnerAllocations: [new ProfitAllocation(Guid.NewGuid(), "شريك أ", 100m, 2160m)])));
+            PartnerAllocations: [new ProfitAllocation(Guid.NewGuid(), "شريك أ", 100m, 3000m)],
+            FeeAddedToSettlement: 200m)));
 
         yield return ("farm-account-status", ReportDocuments.FarmAccountStatus(new StatementResponse(
             CustomerId: Guid.NewGuid(), CustomerName: "مزرعة النور", FarmId: null, FarmName: null,
@@ -154,10 +155,10 @@ public sealed class ReportExportTests
         yield return ("doctor-entitlements", ReportDocuments.DoctorEntitlements(
         [
             new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null,
-                EntitlementSystem.DrugProfit, 840m, 840m, EntitlementStatus.Approved, Guid.NewGuid(),
+                EntitlementSystem.DrugProfit, 840m, EntitlementStatus.Approved, Guid.NewGuid(),
                 Now, null, null, Now, Now),
             new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), null, Guid.NewGuid(),
-                EntitlementSystem.DirectFee, 200m, null, EntitlementStatus.Paid, Guid.NewGuid(),
+                EntitlementSystem.DirectFee, 200m, EntitlementStatus.Paid, Guid.NewGuid(),
                 Now, Now.AddDays(2), PaymentMethod.Cash, Now, Now),
         ]));
 

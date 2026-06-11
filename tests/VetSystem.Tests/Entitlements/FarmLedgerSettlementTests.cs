@@ -99,7 +99,7 @@ public sealed class FarmLedgerSettlementTests
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmA, batchA, productId, quantity: 10m);
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmB, batchB, productId, quantity: 10m);
 
-        // Close both cycles → a pending entitlement per batch (drug profit 50% × (150 − 20) = 65).
+        // Close both cycles → a pending entitlement per batch (M28 — the supervision fee 20 in full).
         (await PatchAsync(client, $"/batches/{batchA}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await PatchAsync(client, $"/batches/{batchB}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -222,7 +222,6 @@ public sealed class FarmLedgerSettlementTests
             supervisionFeeValue = 20m,
             entitlementEnabled = true,
             entitlementSystem = "drug_profit",
-            doctorSharePercent = 50m,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
         return batchId;
     }

@@ -21,7 +21,6 @@ public sealed class SystemBAndToggleTests
     {
         var result = _systemB.Calculate(fee);
         result.ComputedAmount.Should().Be(expected);
-        result.CeilingApplied.Should().BeNull("System B has no ceiling — the agreed fee is credited in full");
     }
 
     [Fact]

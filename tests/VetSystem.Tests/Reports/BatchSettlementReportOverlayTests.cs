@@ -95,16 +95,16 @@ public sealed class BatchSettlementReportOverlayTests
         // Doctor income: revenue at settled prices; the share column equals the recomputed entitlement.
         var doctorRow = income.Rows.Single(r => r.DoctorId == admin.Id);
         doctorRow.TotalRevenue.Should().Be(280m);
-        doctorRow.CalculatedShare.Should().Be(47.50m, "50% × ((20−10)×14 − 20 − 25)");
+        doctorRow.CalculatedShare.Should().Be(20m, "M28 — the entitlement is the supervision fee in full");
 
         // Profit-per-batch (the entitlement engine verbatim): the full settled accounting.
         perBatch.Revenue.Should().Be(280m);
         perBatch.DrugCost.Should().Be(140m);
         perBatch.DrugProfit.Should().Be(140m);
         perBatch.ExamFee.Should().Be(20m);
-        perBatch.DoctorShare.Should().Be(47.50m);
+        perBatch.DoctorShare.Should().Be(20m);
         perBatch.SettlementDiscount.Should().Be(25m);
-        perBatch.ClinicShare.Should().Be(67.50m, "(drugProfit 140 − discount 25) == doctor 47.50 + clinic 67.50");
+        perBatch.ClinicShare.Should().Be(95m, "(drugProfit 140 − discount 25) == doctor 20 + clinic 95");
     }
 
     // ---- helpers ----
@@ -166,7 +166,6 @@ public sealed class BatchSettlementReportOverlayTests
             supervisionFeeValue = 20m,
             entitlementEnabled = true,
             entitlementSystem = "drug_profit",
-            doctorSharePercent = 50m,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         return (customerId, farmId, batchId);

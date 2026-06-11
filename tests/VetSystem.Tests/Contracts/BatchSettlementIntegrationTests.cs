@@ -17,7 +17,8 @@ namespace VetSystem.Tests.Contracts;
 /// catalog 25) on credit across two field invoices (qty 10 + 4 → totals 250 + 100, farm balance 350),
 /// then settles at 20 with a 30 discount:
 /// repricing delta = (20−25)×14 = −70 · settled total = 350 − 70 − 30 = 250 ·
-/// entitlement = 50% × ((20−10)×14 − fee 20 − discount 30) = 45.
+/// entitlement = the supervision fee 20 (M28 — System A carves it from the clinic margin; the discount
+/// shrinks the clinic's drug-profit slice, not the doctor's fixed fee).
 /// Covers the document + ledger adjustments + batch close + entitlement recompute transaction, the
 /// preview read-model, every settle guard, the idempotent replay, the settled-batch freeze
 /// (invariant #11) on REST and /sync, and settlement-price precedence over contract prices.
@@ -66,7 +67,8 @@ public sealed class BatchSettlementIntegrationTests
             settlement.RepricingDelta.Should().Be(-70m);
             settlement.DiscountAmount.Should().Be(30m);
             settlement.OriginalTotal.Should().Be(350m);
-            settlement.SettledTotal.Should().Be(250m);
+            settlement.SettledTotal.Should().Be(250m, "System A does not charge the fee to the farmer");
+            settlement.SupervisionFee.Should().Be(20m, "M28 — the fee snapshot on the settled revenue");
             settlement.SettledBy.Should().Be(admin.Id);
 
             var line = await db.BatchSettlementLines.AsNoTracking().SingleAsync(l => l.SettlementId == settlement.Id);
@@ -92,7 +94,7 @@ public sealed class BatchSettlementIntegrationTests
             (await db.Batches.AsNoTracking().SingleAsync(b => b.Id == batchId)).Status.Should().Be(BatchStatus.Closed);
             var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
             entitlement.Status.Should().Be(EntitlementStatus.Pending);
-            entitlement.ComputedAmount.Should().Be(45m, "50% × ((20−10)×14 − fee 20 − discount 30)");
+            entitlement.ComputedAmount.Should().Be(20m, "M28 — the entitlement is the supervision fee in full");
         }
 
         // The settlement read endpoint and the refreshed preview agree.
@@ -108,6 +110,49 @@ public sealed class BatchSettlementIntegrationTests
         // The batches list surfaces settledAt for the web's routing.
         var list = await client.GetFromJsonAsync<JsonElement>($"/batches?customerId={customerId}");
         list.EnumerateArray().Single().GetProperty("settledAt").ValueKind.Should().NotBe(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Settle_SystemB_ChargesSupervisionFeeOnTop_AfterRepriceAndDiscount()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var productId = await SeedFieldStockAsync(scope, admin.Id);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var (customerId, farmId, batchId) = await SeedFarmBatchAsync(client, admin.Id, entitlementSystem: "direct_fee");
+        await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 250m);
+
+        // Settle at 20 (reprice −50) with a 10 discount. System B adds the supervision fee 20 on top.
+        (await PostAsync(client, $"/batches/{batchId}/settle", new
+        {
+            lines = new[] { new { productId, settledUnitPrice = 20m } },
+            discountAmount = 10m,
+            idempotencyKey = $"settle-{batchId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+
+        var settlement = await db.BatchSettlements.AsNoTracking().SingleAsync(s => s.BatchId == batchId);
+        settlement.SupervisionFee.Should().Be(20m);
+        settlement.SettledTotal.Should().Be(210m, "250 − 50 reprice − 10 discount + 20 supervision fee");
+
+        // Three adjustments on the farm ledger; the fee is a separate +20 with the deterministic key.
+        var ledger = await db.Ledgers.AsNoTracking().SingleAsync(l => l.FarmId == farmId);
+        ledger.Balance.Should().Be(210m, "250 − 50 − 10 + 20");
+        var adjustments = await db.LedgerEntries.AsNoTracking()
+            .Where(e => e.LedgerId == ledger.Id && e.EntryType == LedgerEntryType.Adjustment)
+            .ToListAsync();
+        adjustments.Should().HaveCount(3);
+        adjustments.Single(e => e.IdempotencyKey == $"settle-reprice-{settlement.Id:N}").Amount.Should().Be(-50m);
+        adjustments.Single(e => e.IdempotencyKey == $"settle-discount-{settlement.Id:N}").Amount.Should().Be(-10m);
+        adjustments.Single(e => e.IdempotencyKey == $"settle-supervision-{settlement.Id:N}").Amount.Should().Be(20m);
+
+        // The doctor's entitlement is the fee credited in full.
+        var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
+        entitlement.CalculationSystem.Should().Be(EntitlementSystem.DirectFee);
+        entitlement.ComputedAmount.Should().Be(20m);
     }
 
     [Fact]
@@ -305,7 +350,7 @@ public sealed class BatchSettlementIntegrationTests
     }
 
     [Fact]
-    public async Task SettledPrice_Overrides_ContractPrice_InTheEntitlement()
+    public async Task SettledPrice_Overrides_ContractPrice_InTheLedgerAndProfit()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -331,8 +376,8 @@ public sealed class BatchSettlementIntegrationTests
         // The field invoice bills at the contract price: 22 × 10 = 220 on credit.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 220m);
 
-        // Settling at 18 beats the contract's 22 in the entitlement math:
-        // 50% × ((18−10)×10 − fee 20) = 30 — NOT 50% × ((22−10)×10 − 20) = 50.
+        // Settle at 18 — below the contract's 22. M28: the entitlement is the fixed fee 20 regardless of
+        // price, but the settled price still supersedes the contract price in the LEDGER and drug profit.
         (await PostAsync(client, $"/batches/{batchId}/settle", new
         {
             lines = new[] { new { productId, settledUnitPrice = 18m } },
@@ -342,9 +387,10 @@ public sealed class BatchSettlementIntegrationTests
 
         await using var db = NewContext(scope, admin.Id);
         var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
-        entitlement.ComputedAmount.Should().Be(30m, "the settlement price supersedes the contract price");
+        entitlement.ComputedAmount.Should().Be(20m, "the entitlement is the supervision fee in full");
 
-        // The ledger moved by the billed-vs-settled delta: (18−22)×10 = −40 → balance 180.
+        // The ledger moved by the billed-vs-settled delta: (18−22)×10 = −40 → balance 180 (settled price
+        // beats the contract's 22, which was what the invoice billed).
         (await db.Ledgers.AsNoTracking().Where(l => l.FarmId == farmId).Select(l => l.Balance).SingleAsync())
             .Should().Be(180m);
     }
@@ -378,7 +424,7 @@ public sealed class BatchSettlementIntegrationTests
     }
 
     private static async Task<(Guid CustomerId, Guid FarmId, Guid BatchId)> SeedFarmBatchAsync(
-        HttpClient client, Guid doctorId)
+        HttpClient client, Guid doctorId, string entitlementSystem = "drug_profit")
     {
         var customerId = Guid.CreateVersion7();
         (await PostAsync(client, "/customers", new
@@ -407,8 +453,7 @@ public sealed class BatchSettlementIntegrationTests
             supervisionFeeModel = FeeModel.FixedAmount,
             supervisionFeeValue = 20m,
             entitlementEnabled = true,
-            entitlementSystem = "drug_profit",
-            doctorSharePercent = 50m,
+            entitlementSystem,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         return (customerId, farmId, batchId);

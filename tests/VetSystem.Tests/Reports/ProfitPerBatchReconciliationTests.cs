@@ -13,11 +13,12 @@ using VetSystem.Tests.Infrastructure;
 namespace VetSystem.Tests.Reports;
 
 /// <summary>
-/// M12 task 17 — the profit-per-batch report must agree with the M9 entitlement calculation on the
-/// same inputs to the cent (exit criterion). Both now flow through
+/// M12 task 17 + M28 — the profit-per-batch report must agree with the entitlement calculation on the
+/// same inputs to the cent (exit criterion). Both flow through
 /// <c>IEntitlementService.ExplainForBatchAsync</c>, so this seeds a real batch + invoice over Postgres,
-/// closes it to persist the entitlement, then asserts the report's doctor/clinic split — including the
-/// ceiling path — matches the persisted <c>computed_amount</c> exactly.
+/// closes it to persist the entitlement, then asserts the report's doctor/clinic split matches the
+/// persisted <c>computed_amount</c> exactly — under both System A (fee carved from drug profit) and
+/// System B (fee charged on top).
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class ProfitPerBatchReconciliationTests
@@ -33,18 +34,19 @@ public sealed class ProfitPerBatchReconciliationTests
 
         var customerId = await CreateCustomerAsync(client);
         var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m, sharePercent: 50m);
+            feeModel: FeeModel.FixedAmount, feeValue: 20m);
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("cash", 250m)]);
         (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // The persisted entitlement: profit = (25−10)×10 = 150; exam fee 20; share = 50% × (150−20) = 65.
+        // M28 — the supervision fee IS the entitlement: fixed fee 20 ⇒ the doctor is owed 20 in full
+        // (profit = (25−10)×10 = 150 funds it; System A carves it from the clinic's margin, no clamp).
         decimal persistedShare;
         await using (var db = NewContext(scope, admin.Id))
         {
             persistedShare = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId)).ComputedAmount;
         }
-        persistedShare.Should().Be(65m);
+        persistedShare.Should().Be(20m);
 
         var report = await GetReportAsync(client, batchId);
 
@@ -53,8 +55,8 @@ public sealed class ProfitPerBatchReconciliationTests
         report.DrugProfit.Should().Be(150m);
         report.ExamFee.Should().Be(20m);
         report.DoctorShare.Should().Be(persistedShare, "the report must reconcile to the persisted entitlement to the cent");
-        report.CeilingApplied.Should().BeNull();
-        report.ClinicShare.Should().Be(150m - persistedShare); // 85 — System A: clinic keeps profit minus the doctor's share
+        report.ClinicShare.Should().Be(150m - 20m); // 130 — System A: clinic keeps drug profit minus the fee
+        report.FeeAddedToSettlement.Should().Be(0m, "System A funds the fee from the clinic margin, not the farmer");
         report.EntitlementSystem.Should().Be(EntitlementSystem.DrugProfit);
         report.EntitlementEnabled.Should().BeTrue();
 
@@ -65,7 +67,7 @@ public sealed class ProfitPerBatchReconciliationTests
     }
 
     [Fact]
-    public async Task ProfitPerBatch_WithCeiling_ReportMatchesCappedEntitlement()
+    public async Task ProfitPerBatch_SystemB_FeeChargedOnTop_ReportReconciles()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -74,29 +76,27 @@ public sealed class ProfitPerBatchReconciliationTests
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        // raw share would be 50% × (150 − 20) = 65, but the ceiling caps it at 50.
         var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m, sharePercent: 50m, ceiling: 50m);
+            feeModel: FeeModel.FixedAmount, feeValue: 20m, entitlementSystem: "direct_fee");
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("cash", 250m)]);
         (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         decimal persistedShare;
-        decimal? persistedCeiling;
         await using (var db = NewContext(scope, admin.Id))
         {
-            var e = await db.DoctorEntitlements.AsNoTracking().SingleAsync(x => x.BatchId == batchId);
-            persistedShare = e.ComputedAmount;
-            persistedCeiling = e.CeilingApplied;
+            persistedShare = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId)).ComputedAmount;
         }
-        persistedShare.Should().Be(50m);
-        persistedCeiling.Should().Be(50m);
+        persistedShare.Should().Be(20m, "System B credits the supervision fee to the doctor in full");
 
         var report = await GetReportAsync(client, batchId);
 
         report.DoctorShare.Should().Be(persistedShare);
-        report.CeilingApplied.Should().Be(persistedCeiling);
-        report.ClinicShare.Should().Be(150m - 50m); // 100
+        report.ExamFee.Should().Be(20m);
+        report.FeeAddedToSettlement.Should().Be(20m, "System B charges the fee to the farmer on top");
+        // The fee is a wash for the clinic (collected from the farmer, paid to the doctor): it keeps the full drug profit.
+        report.ClinicShare.Should().Be(150m);
+        report.EntitlementSystem.Should().Be(EntitlementSystem.DirectFee);
     }
 
     // ---- helpers ----
@@ -148,8 +148,8 @@ public sealed class ProfitPerBatchReconciliationTests
     }
 
     private static async Task<Guid> CreateBatchAsync(
-        HttpClient client, Guid customerId, Guid doctorId, string feeModel, decimal feeValue, decimal sharePercent,
-        decimal? ceiling = null)
+        HttpClient client, Guid customerId, Guid doctorId, string feeModel, decimal feeValue,
+        string entitlementSystem = "drug_profit")
     {
         var batchId = Guid.CreateVersion7();
         (await PostAsync(client, "/batches", new
@@ -163,9 +163,7 @@ public sealed class ProfitPerBatchReconciliationTests
             supervisionFeeModel = feeModel,
             supervisionFeeValue = feeValue,
             entitlementEnabled = true,
-            entitlementSystem = "drug_profit",
-            doctorSharePercent = sharePercent,
-            doctorShareCeiling = ceiling,
+            entitlementSystem,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
         return batchId;
     }
