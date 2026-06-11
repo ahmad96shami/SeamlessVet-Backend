@@ -21,7 +21,7 @@ namespace VetSystem.Tests.Contracts;
 /// shrinks the clinic's drug-profit slice, not the doctor's fixed fee).
 /// Covers the document + ledger adjustments + batch close + entitlement recompute transaction, the
 /// preview read-model, every settle guard, the idempotent replay, the settled-batch freeze
-/// (invariant #11) on REST and /sync, and settlement-price precedence over contract prices.
+/// (invariant #11) on REST and /sync, and settlement-price precedence over the billed catalog price.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class BatchSettlementIntegrationTests
@@ -350,7 +350,7 @@ public sealed class BatchSettlementIntegrationTests
     }
 
     [Fact]
-    public async Task SettledPrice_Overrides_ContractPrice_InTheLedgerAndProfit()
+    public async Task SettledPrice_Overrides_BilledPrice_InTheLedgerAndProfit()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -360,24 +360,11 @@ public sealed class BatchSettlementIntegrationTests
 
         var (customerId, farmId, batchId) = await SeedFarmBatchAsync(client, admin.Id);
 
-        // An active contract prices the product at 22 (below catalog 25).
-        var contractId = Guid.CreateVersion7();
-        (await PostAsync(client, "/contracts", new
-        {
-            id = contractId, customerId, responsibleDoctorId = admin.Id,
-            periodStart = "2026-01-01", animalType = "poultry",
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/contracts/{contractId}/medication-prices", new
-        {
-            id = Guid.CreateVersion7(), productId, contractPrice = 22m,
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/contracts/{contractId}/activate", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        // The field invoice bills at the catalog price (M29 — no contract pricing): 25 × 10 = 250 on credit.
+        await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 250m);
 
-        // The field invoice bills at the contract price: 22 × 10 = 220 on credit.
-        await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 220m);
-
-        // Settle at 18 — below the contract's 22. M28: the entitlement is the fixed fee 20 regardless of
-        // price, but the settled price still supersedes the contract price in the LEDGER and drug profit.
+        // Settle at 18 — below the catalog 25. M28: the entitlement is the fixed fee 20 regardless of
+        // price, but the settled price supersedes the billed price in the LEDGER and drug profit.
         (await PostAsync(client, $"/batches/{batchId}/settle", new
         {
             lines = new[] { new { productId, settledUnitPrice = 18m } },
@@ -389,8 +376,8 @@ public sealed class BatchSettlementIntegrationTests
         var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
         entitlement.ComputedAmount.Should().Be(20m, "the entitlement is the supervision fee in full");
 
-        // The ledger moved by the billed-vs-settled delta: (18−22)×10 = −40 → balance 180 (settled price
-        // beats the contract's 22, which was what the invoice billed).
+        // The ledger moved by the billed-vs-settled delta: (18−25)×10 = −70 → balance 180 (the settled
+        // price beats the catalog 25, which was what the invoice billed).
         (await db.Ledgers.AsNoTracking().Where(l => l.FarmId == farmId).Select(l => l.Balance).SingleAsync())
             .Should().Be(180m);
     }

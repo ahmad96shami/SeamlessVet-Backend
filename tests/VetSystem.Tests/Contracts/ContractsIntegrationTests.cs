@@ -18,8 +18,8 @@ namespace VetSystem.Tests.Contracts;
 ///       while an active contract is server-authoritative;</item>
 /// <item>the <c>draft → active</c> activation gate returns 403 without <c>contracts.activate</c> and
 ///       activates + locks with it;</item>
-/// <item>a field invoice bills catalog price while the contract is draft and the contract-overridden
-///       price once it is active.</item>
+/// <item>a field invoice bills catalog price whether the contract is draft or active — M29 removed
+///       per-contract medication pricing, so a contract never overrides the catalog price.</item>
 /// </list>
 /// </summary>
 [Trait("Category", "Integration")]
@@ -119,7 +119,7 @@ public sealed class ContractsIntegrationTests
     }
 
     [Fact]
-    public async Task FieldInvoice_BillsCatalogWhileDraft_ContractPriceWhenActive()
+    public async Task FieldInvoice_BillsCatalogPrice_WhetherContractDraftOrActive()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -130,7 +130,8 @@ public sealed class ContractsIntegrationTests
 
         var customerId = await CreateCustomerAsync(client);
 
-        // Draft contract with a per-medication override (18 vs. catalog 25) for this product.
+        // A contract for the customer (M29 removed per-medication price overrides, so the contract
+        // carries no pricing terms — it never changes what a field visit bills).
         var contractId = Guid.CreateVersion7();
         (await PostAsync(client, "/contracts", new
         {
@@ -139,29 +140,23 @@ public sealed class ContractsIntegrationTests
             responsibleDoctorId = admin.Id,
             periodStart = "2026-01-01",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/contracts/{contractId}/medication-prices", new
-        {
-            id = Guid.CreateVersion7(),
-            productId,
-            contractPrice = 18m,
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // While the contract is still DRAFT, a field visit bills at catalog price (PRD §6.6).
+        // While the contract is DRAFT, a field visit bills at catalog price.
         var draftInvoiceId = await IssueFieldInvoiceAsync(client, admin.Id, customerId, productId);
         await using (var db = NewContext(scope, admin.Id))
         {
             (await db.InvoiceItems.AsNoTracking().Where(i => i.InvoiceId == draftInvoiceId).Select(i => i.UnitPrice).FirstAsync())
-                .Should().Be(25m, "a draft contract does not apply contract pricing");
+                .Should().Be(25m, "field visits bill the catalog price");
         }
 
-        // Activate the contract → the override now binds.
+        // Activating the contract changes nothing — there is no contract pricing tier any more.
         (await PostAsync(client, $"/contracts/{contractId}/activate", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var activeInvoiceId = await IssueFieldInvoiceAsync(client, admin.Id, customerId, productId);
         await using (var db = NewContext(scope, admin.Id))
         {
             (await db.InvoiceItems.AsNoTracking().Where(i => i.InvoiceId == activeInvoiceId).Select(i => i.UnitPrice).FirstAsync())
-                .Should().Be(18m, "an active contract overrides the catalog price for the product");
+                .Should().Be(25m, "an active contract still bills catalog price (M29 — no contract override)");
         }
     }
 
