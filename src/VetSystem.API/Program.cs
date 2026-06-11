@@ -185,6 +185,12 @@ builder.Services.AddScoped<VetSystem.Application.DoctorPartnerLedgers.IDoctorPar
 builder.Services.AddScoped<VetSystem.API.DoctorPartners.DoctorPartnersService>();
 builder.Services.AddScoped<VetSystem.API.DoctorPartners.DoctorPartnerPaymentsService>();
 
+// M31 — employees + their HR salary/loan ledger (the AP-side mirror of the supplier ledger triad).
+builder.Services.AddScoped<VetSystem.Application.EmployeeLedgers.IEmployeeLedgerService,
+    VetSystem.Infrastructure.EmployeeLedgers.EmployeeLedgerService>();
+builder.Services.AddScoped<VetSystem.API.Employees.EmployeesService>();
+builder.Services.AddScoped<VetSystem.API.Employees.EmployeePaymentsService>();
+
 // M8 — contracts & batches (lifecycle, per-medication pricing, supervision cycles)
 builder.Services.AddScoped<VetSystem.Application.Contracts.IContractLifecycleService,
     VetSystem.Infrastructure.Contracts.ContractLifecycleService>();
@@ -262,6 +268,7 @@ builder.Services.AddScoped<VetSystem.API.Jobs.MedicationDueJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.LowStockAlertsJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.ExpirationWarningsJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.ScheduledReportDeliveryJob>();
+builder.Services.AddScoped<VetSystem.API.Jobs.MonthlySalaryAccrualJob>(); // M31 — monthly salary accrual
 
 // M12 — reports (PRD §7.9). Each report is a read-only, environment-scoped, offset-paged service over
 // ApplicationDbContext; the /reports endpoint group is gated on PermissionKey.ReportsRead.
@@ -520,6 +527,10 @@ if (hangfireEnabled)
         "expiration-warnings", j => j.RunAsync(CancellationToken.None), "0 7 * * *");
     RecurringJob.AddOrUpdate<VetSystem.API.Jobs.ScheduledReportDeliveryJob>(
         "scheduled-report-delivery", j => j.RunAsync(CancellationToken.None), "0 7 * * 1");
+    // M31 — salary accrual fires once a month (1st at 06:00 UTC). The period idempotency key
+    // (salary-accrual-{employeeId}-{yyyyMM}) makes a same-month re-run a no-op.
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.MonthlySalaryAccrualJob>(
+        "monthly-salary-accrual", j => j.RunAsync(CancellationToken.None), "0 6 1 * *");
 }
 
 if (args.Contains("--seed") || args.Contains("--force-seed"))
