@@ -29,7 +29,8 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
         RuleFor(l => l.DiscountAmount).GreaterThanOrEqualTo(0m);
 
         // Visit-charge back-links: at most one, and it must agree with the line's catalog target
-        // (a prescription dispenses a product; a procedure / vaccination performs a service).
+        // (a prescription dispenses a product; a procedure performs a service; M26 — a vaccination
+        // dispenses a stock product).
         RuleFor(l => l)
             .Must(l => new[] { l.PrescriptionId, l.ProcedureId, l.VaccinationId, l.NightStayId, l.CheckupFeeVisitId }
                 .Count(b => b is not null) <= 1)
@@ -42,10 +43,10 @@ internal sealed class InvoiceLineRequestValidator : AbstractValidator<InvoiceLin
             .NotNull()
             .When(l => l.ProcedureId is not null)
             .WithMessage("A procedure-linked line must reference the procedure's service_id.");
-        RuleFor(l => l.ServiceId)
+        RuleFor(l => l.ProductId)
             .NotNull()
             .When(l => l.VaccinationId is not null)
-            .WithMessage("A vaccination-linked line must reference the vaccination's service_id.");
+            .WithMessage("A vaccination-linked line must reference the vaccine's product_id.");
     }
 }
 

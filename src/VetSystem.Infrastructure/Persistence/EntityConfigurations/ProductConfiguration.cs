@@ -25,7 +25,7 @@ internal sealed class ProductConfiguration : IEntityTypeConfiguration<Product>
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_products_category",
-            "category IN ('medication','product')"));
+            "category IN ('medication','product','vaccine')"));
 
         builder.HasIndex(p => new { p.EnvironmentId, p.Barcode })
             .HasDatabaseName("ux_products_env_barcode")

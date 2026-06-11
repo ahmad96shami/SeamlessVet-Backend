@@ -14,9 +14,10 @@ internal sealed class VaccinationConfiguration : IEntityTypeConfiguration<Vaccin
         builder.Property(v => v.PetId).HasColumnName("pet_id");
         builder.Property(v => v.CustomerId).HasColumnName("customer_id");
         builder.Property(v => v.VisitId).HasColumnName("visit_id");
-        builder.Property(v => v.ServiceId).HasColumnName("service_id");
+        builder.Property(v => v.ProductId).HasColumnName("product_id");
         builder.Property(v => v.VaccineType).HasColumnName("vaccine_type").IsRequired().HasMaxLength(128);
         builder.Property(v => v.Price).HasColumnName("price").HasColumnType("numeric(14,2)");
+        builder.Property(v => v.ResolvedUnitCost).HasColumnName("resolved_unit_cost").HasColumnType("numeric(14,2)");
         builder.Property(v => v.DateGiven).HasColumnName("date_given").IsRequired();
         builder.Property(v => v.NextDueDate).HasColumnName("next_due_date");
         builder.Property(v => v.CertificateUrl).HasColumnName("certificate_url");
@@ -41,9 +42,10 @@ internal sealed class VaccinationConfiguration : IEntityTypeConfiguration<Vaccin
             .HasForeignKey(v => v.VisitId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasOne<Service>()
+        // M26 — the catalog vaccine is now a stock product (category vaccine).
+        builder.HasOne<Product>()
             .WithMany()
-            .HasForeignKey(v => v.ServiceId)
+            .HasForeignKey(v => v.ProductId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

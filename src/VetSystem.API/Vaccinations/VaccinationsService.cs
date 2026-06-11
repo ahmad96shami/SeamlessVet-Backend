@@ -2,6 +2,8 @@ using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.API.Financial;
 using VetSystem.Application.Common;
+using VetSystem.Application.Inventory;
+using VetSystem.Application.Inventory.Contracts;
 using VetSystem.Application.Vaccinations.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
@@ -13,6 +15,15 @@ namespace VetSystem.API.Vaccinations;
 /// Vaccination CRUD (PRD §5.2, §6.7, M5 task 12). Targets a single pet or a farm group (customer);
 /// <c>NextDueDate</c> is what the M11 reminder job scans. Existence of any referenced pet/customer/
 /// visit is validated within the caller's environment via the global query filter.
+/// <para>
+/// M26 — a catalog-linked vaccination (<c>ProductId</c> set, a stock product of category
+/// <c>vaccine</c>) is <b>administered</b> on create: an atomic <c>sale_deduct</c> via
+/// <see cref="IInventoryService"/> moves stock FEFO from the clinic warehouse (or the field doctor's
+/// inventory for a field visit) and the lot's weighted-average cost is captured onto
+/// <see cref="Vaccination.ResolvedUnitCost"/>. The issuance assembler then bills it as a product line
+/// without re-deducting (the stock — and COGS — already moved; mirrors a billable in-clinic med).
+/// Free-text rows (<c>ProductId</c> null) are clinical records only — no stock, no bill.
+/// </para>
 /// </summary>
 public sealed class VaccinationsService
 {
@@ -22,13 +33,20 @@ public sealed class VaccinationsService
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IMapper _mapper;
     private readonly IClock _clock;
+    private readonly IInventoryService _inventory;
 
-    public VaccinationsService(ApplicationDbContext db, ICurrentUserAccessor currentUser, IMapper mapper, IClock clock)
+    public VaccinationsService(
+        ApplicationDbContext db,
+        ICurrentUserAccessor currentUser,
+        IMapper mapper,
+        IClock clock,
+        IInventoryService inventory)
     {
         _db = db;
         _currentUser = currentUser;
         _mapper = mapper;
         _clock = clock;
+        _inventory = inventory;
     }
 
     public async Task<IReadOnlyList<VaccinationResponse>> ListAsync(
@@ -103,20 +121,30 @@ public sealed class VaccinationsService
                 _db.Customers.AnyAsync(c => c.Id == customerId, cancellationToken), "customer", customerId);
         }
 
+        Visit? visit = null;
         if (request.VisitId is { } visitId)
         {
-            await RequireExistsAsync(_db.Visits.AnyAsync(v => v.Id == visitId, cancellationToken), "visit", visitId);
+            visit = await _db.Visits.FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
+                    ?? throw new NotFoundException("visit", visitId);
         }
 
-        // M22 — catalog-linked (billable) vaccination: price snapshots at recording time,
-        // defaulting to the catalog price (mirrors ProceduresService.CreateAsync). Existence is
-        // checked through the env-scoped query filter even when the request carries its own price.
-        if (request.ServiceId is { } svcId)
+        // M26 — catalog-linked (billable) vaccination: the catalog vaccine is a stock product
+        // (category vaccine). Price snapshots at recording time, defaulting to the product's selling
+        // price (mirrors ProceduresService.CreateAsync). Existence is checked through the env-scoped
+        // query filter even when the request carries its own price.
+        Product? vaccineProduct = null;
+        if (request.ProductId is { } productId)
         {
-            await RequireExistsAsync(_db.Services.AnyAsync(s => s.Id == svcId, cancellationToken), "service", svcId);
+            vaccineProduct = await _db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId, cancellationToken)
+                             ?? throw new NotFoundException("product", productId);
+            if (vaccineProduct.Category != ProductCategory.Vaccine)
+            {
+                throw new ConflictException("product_not_vaccine",
+                    "A vaccination must link a product of category 'vaccine'.");
+            }
         }
 
-        var price = request.Price ?? await ResolveDefaultPriceAsync(request.ServiceId, cancellationToken);
+        var price = request.Price ?? vaccineProduct?.SellingPrice;
 
         if (request.Id is { } id && id != Guid.Empty)
         {
@@ -134,7 +162,7 @@ public sealed class VaccinationsService
             PetId = request.PetId,
             CustomerId = request.CustomerId,
             VisitId = request.VisitId,
-            ServiceId = request.ServiceId,
+            ProductId = request.ProductId,
             VaccineType = request.VaccineType,
             Price = price,
             DateGiven = request.DateGiven,
@@ -142,9 +170,55 @@ public sealed class VaccinationsService
             CertificateUrl = request.CertificateUrl,
         };
 
-        _db.Vaccinations.Add(vaccination);
-        await _db.SaveChangesAsync(cancellationToken);
+        if (vaccineProduct is not null)
+        {
+            await AdministerAsync(vaccination, visit, cancellationToken);
+        }
+        else
+        {
+            _db.Vaccinations.Add(vaccination);
+            await _db.SaveChangesAsync(cancellationToken);
+        }
+
         return _mapper.Map<VaccinationResponse>(vaccination);
+    }
+
+    /// <summary>
+    /// M26 — persists the vaccination and its <c>sale_deduct</c> movement in one transaction (mirrors
+    /// <c>PrescriptionsService.AdministerAsync</c>). The movement's idempotency key is derived from the
+    /// vaccination id, so a retried apply (or the HTTP-level idempotency replay) never double-deducts;
+    /// the consumed lots' FEFO weighted-average cost is captured for the issuance assembler.
+    /// </summary>
+    private async Task AdministerAsync(Vaccination vaccination, Visit? visit, CancellationToken cancellationToken)
+    {
+        var (locationType, locationId) = await ResolveDeductionLocationAsync(visit, cancellationToken);
+
+        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
+
+        _db.Vaccinations.Add(vaccination);
+        await _db.SaveChangesAsync(cancellationToken); // assigns vaccination.Id for the movement key below
+
+        var movement = await _inventory.ApplyMovementAsync(
+            new MovementIntent(
+                Id: null,
+                MovementType: MovementType.SaleDeduct,
+                ProductId: vaccination.ProductId!.Value,
+                Quantity: 1m, // a vaccination administers a single dose
+                FromLocationType: locationType,
+                FromLocationId: locationId,
+                ToLocationType: null,
+                ToLocationId: null,
+                IdempotencyKey: $"vax-{vaccination.Id}",
+                Reason: "vaccination administered",
+                VisitId: vaccination.VisitId),
+            cancellationToken);
+
+        // Capture the FEFO cost of the deducted lot so the issuance assembler snapshots it as COGS
+        // (stock has already moved, so issuance won't re-resolve it).
+        vaccination.ResolvedUnitCost = Money(movement.ResolvedUnitCost);
+        await _db.SaveChangesAsync(cancellationToken);
+
+        await tx.CommitAsync(cancellationToken);
     }
 
     public async Task<VaccinationResponse> UpdateAsync(
@@ -153,23 +227,24 @@ public sealed class VaccinationsService
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException("vaccination", id);
 
-        // M22 (BilledChargeGuard) — once an invoice line bills this vaccination, its money/identity
-        // fields are frozen — change-detected so date/certificate-only patches still apply.
-        var changesService = request.ServiceId.HasValue && request.ServiceId != vaccination.ServiceId;
-        var changesPrice = request.Price.HasValue && request.Price != vaccination.Price;
-        if (changesService || changesPrice)
+        // M26 — the catalog link drives an inventory deduction at recording; re-pointing it would
+        // desync the stock already moved. Block it (mirrors BilledChargeGuard's identity freeze) and
+        // require a delete + re-record instead. Only metadata patches (date/certificate/next-due) flow.
+        if (request.ProductId.HasValue && request.ProductId != vaccination.ProductId)
         {
-            await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
+            throw new ConflictException("vaccination_product_immutable",
+                "A vaccination's catalog vaccine cannot be changed after recording (stock already moved); delete and re-record.");
         }
 
-        if (request.ServiceId is { } serviceId)
+        // Once an invoice line bills this vaccination, its price is frozen too (change-detected so
+        // date/certificate-only patches still apply).
+        if (request.Price.HasValue && request.Price != vaccination.Price)
         {
-            await RequireExistsAsync(_db.Services.AnyAsync(s => s.Id == serviceId, cancellationToken), "service", serviceId);
-            vaccination.ServiceId = serviceId;
+            await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
+            vaccination.Price = request.Price;
         }
 
         if (request.VaccineType is not null) vaccination.VaccineType = request.VaccineType;
-        if (request.Price.HasValue) vaccination.Price = request.Price;
         if (request.DateGiven.HasValue) vaccination.DateGiven = request.DateGiven.Value;
         if (request.NextDueDate.HasValue) vaccination.NextDueDate = request.NextDueDate;
         if (request.CertificateUrl is not null) vaccination.CertificateUrl = request.CertificateUrl;
@@ -183,24 +258,49 @@ public sealed class VaccinationsService
         var vaccination = await _db.Vaccinations.FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                           ?? throw new NotFoundException("vaccination", id);
 
-        // M22 — a billed vaccination backs an invoice line (BilledChargeGuard).
+        // M22 — a billed vaccination backs an invoice line (BilledChargeGuard). Inventory is
+        // append-only: a deduction already applied for an administered vaccine is not auto-reversed —
+        // post a return_add movement to correct stock.
         await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
 
         _db.Vaccinations.Remove(vaccination);
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    /// <summary>No catalog vaccine → no price (legacy free-text rows stay records-only, never 0-priced).</summary>
-    private async Task<decimal?> ResolveDefaultPriceAsync(Guid? serviceId, CancellationToken cancellationToken)
+    /// <summary>
+    /// M26 — where an administered vaccine's stock is deducted: the field doctor's inventory for a
+    /// field visit, else the central warehouse (an in-clinic visit or a stand-alone recording).
+    /// </summary>
+    private async Task<(string LocationType, Guid LocationId)> ResolveDeductionLocationAsync(
+        Visit? visit, CancellationToken cancellationToken)
     {
-        if (serviceId is not { } sid)
+        if (visit is { VisitType: VisitType.Field })
         {
-            return null;
+            var fieldId = await _db.FieldInventories
+                .Where(fi => fi.DoctorId == visit.DoctorId)
+                .Select(fi => (Guid?)fi.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            if (fieldId is not { } fid)
+            {
+                throw new ConflictException("no_field_inventory",
+                    "The visit's field doctor has no field inventory to deduct the administered vaccine from.");
+            }
+
+            return (StockLocation.Field, fid);
         }
 
-        var service = await _db.Services.AsNoTracking().FirstOrDefaultAsync(s => s.Id == sid, cancellationToken)
-                      ?? throw new NotFoundException("service", sid);
-        return service.DefaultPrice;
+        var warehouseId = await _db.Warehouses
+            .Select(w => (Guid?)w.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (warehouseId is not { } wid)
+        {
+            throw new ConflictException("no_warehouse",
+                "No warehouse exists in this environment to deduct the administered vaccine from.");
+        }
+
+        return (StockLocation.Warehouse, wid);
     }
 
     private static async Task RequireExistsAsync(Task<bool> existsQuery, string entity, Guid id)
@@ -218,4 +318,6 @@ public sealed class VaccinationsService
             throw new ForbiddenException("unauthenticated", "Authentication required.");
         }
     }
+
+    private static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 }

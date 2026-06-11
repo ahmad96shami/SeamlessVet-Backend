@@ -11,8 +11,11 @@ namespace VetSystem.API.Endpoints.Sync;
 /// <summary>
 /// <c>/sync/vaccinations</c> (M5 task 19). Targets a pet or a farm-group customer (at least one);
 /// persists the device record, validating referenced rows exist in the actor's environment.
-/// M22: accepts the catalog link (<c>service_id</c>, billable) + <c>price</c> snapshot; billed
-/// vaccinations are frozen like billed procedures (BilledChargeGuard).
+/// M26: accepts the catalog link (<c>product_id</c> — a stock product of category <c>vaccine</c>,
+/// billable) + <c>price</c> snapshot; billed vaccinations are frozen like billed procedures
+/// (BilledChargeGuard). This write path performs <b>no</b> inventory deduction: in the offline field
+/// flow the device deducts its local stock and syncs that as a separate <c>/sync/inventory_movements</c>
+/// delta (mirrors <c>PrescriptionsSyncHandler</c>) — re-deducting here would double-count.
 /// </summary>
 public sealed class VaccinationsSyncHandler : ISyncTableHandler
 {
@@ -69,16 +72,22 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
             throw new ConflictException("invalid_next_due_date", "next_due_date must be on or after date_given.");
         }
 
-        // M22 — optional catalog link; price defaults to the catalog price when omitted.
-        var serviceId = SyncBody.OptionalGuid(body, "service_id");
+        // M26 — optional catalog link; the vaccine is a stock product (category vaccine), price
+        // defaults to its selling price when omitted.
+        var productId = SyncBody.OptionalGuid(body, "product_id");
         var price = SyncBody.OptionalDecimal(body, "price");
-        if (serviceId is { } svc)
+        if (productId is { } prod)
         {
-            var defaultPrice = await _db.Services.AsNoTracking()
-                                   .Where(s => s.Id == svc).Select(s => (decimal?)s.DefaultPrice)
-                                   .FirstOrDefaultAsync(cancellationToken)
-                               ?? throw new NotFoundException("service", svc);
-            price ??= defaultPrice;
+            var product = await _db.Products.AsNoTracking()
+                              .Where(p => p.Id == prod).Select(p => new { p.Category, p.SellingPrice })
+                              .FirstOrDefaultAsync(cancellationToken)
+                          ?? throw new NotFoundException("product", prod);
+            if (product.Category != ProductCategory.Vaccine)
+            {
+                throw new ConflictException("product_not_vaccine",
+                    "A vaccination must link a product of category 'vaccine'.");
+            }
+            price ??= product.SellingPrice;
         }
 
         var vaccination = new Vaccination
@@ -87,7 +96,7 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
             PetId = petId,
             CustomerId = customerId,
             VisitId = visitId,
-            ServiceId = serviceId,
+            ProductId = productId,
             VaccineType = SyncBody.RequireString(body, "vaccine_type"),
             Price = price,
             DateGiven = dateGiven,
@@ -108,25 +117,33 @@ public sealed class VaccinationsSyncHandler : ISyncTableHandler
 
         // Mirror the REST rule (BilledChargeGuard): once an invoice line bills this vaccination,
         // its money/identity fields are frozen — change-detected so date/certificate patches apply.
-        var incomingServiceId = body.TryGetProperty("service_id", out _)
-            ? SyncBody.OptionalGuid(body, "service_id")
-            : vaccination.ServiceId;
+        var incomingProductId = body.TryGetProperty("product_id", out _)
+            ? SyncBody.OptionalGuid(body, "product_id")
+            : vaccination.ProductId;
         var incomingPrice = body.TryGetProperty("price", out _)
             ? SyncBody.OptionalDecimal(body, "price")
             : vaccination.Price;
-        if (incomingServiceId != vaccination.ServiceId || incomingPrice != vaccination.Price)
+        if (incomingProductId != vaccination.ProductId || incomingPrice != vaccination.Price)
         {
             await BilledChargeGuard.EnsureVaccinationNotBilledAsync(_db, id, cancellationToken);
         }
 
-        if (body.TryGetProperty("service_id", out _))
+        if (body.TryGetProperty("product_id", out _))
         {
-            var serviceId = SyncBody.OptionalGuid(body, "service_id");
-            if (serviceId is { } sid)
+            var productId = SyncBody.OptionalGuid(body, "product_id");
+            if (productId is { } pid)
             {
-                await EnsureExistsAsync(_db.Services.AnyAsync(s => s.Id == sid, cancellationToken), "service", sid);
+                var category = await _db.Products.AsNoTracking()
+                    .Where(p => p.Id == pid).Select(p => (string?)p.Category)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    ?? throw new NotFoundException("product", pid);
+                if (category != ProductCategory.Vaccine)
+                {
+                    throw new ConflictException("product_not_vaccine",
+                        "A vaccination must link a product of category 'vaccine'.");
+                }
             }
-            vaccination.ServiceId = serviceId;
+            vaccination.ProductId = productId;
         }
         if (body.TryGetProperty("price", out _)) vaccination.Price = SyncBody.OptionalDecimal(body, "price");
 

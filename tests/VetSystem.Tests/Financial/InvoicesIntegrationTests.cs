@@ -383,24 +383,22 @@ public sealed class InvoicesIntegrationTests
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
-        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var (warehouseId, _) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var vaccineProductId = await SeedWarehouseVaccineAsync(scope, warehouseId, 100m, purchase: 8m, selling: 30m);
         await using var factory = new VetApiFactory();
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var vaccineServiceId = Guid.CreateVersion7();
-        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح السعار", category = "vaccination", defaultPrice = 30m }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
 
         var visitId = Guid.CreateVersion7();
         (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Catalog-linked, no explicit price → snapshots the catalog default (30).
+        // Catalog-linked, no explicit price → snapshots the product's selling price (30).
         var vaccinationId = Guid.CreateVersion7();
         (await PostAsync(client, "/vaccinations", new
         {
-            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId,
+            id = vaccinationId, customerId, visitId, productId = vaccineProductId,
             vaccineType = "لقاح السعار", dateGiven = "2026-06-01",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -425,9 +423,11 @@ public sealed class InvoicesIntegrationTests
         items.Should().HaveCount(1, "only the catalog-linked vaccination assembles; free-text never bills");
         var line = items.Single();
         line.VaccinationId.Should().Be(vaccinationId);
-        line.ServiceId.Should().Be(vaccineServiceId);
+        line.ProductId.Should().Be(vaccineProductId, "M26 — a vaccination bills as a product line");
+        line.ServiceId.Should().BeNull();
         line.Quantity.Should().Be(1m);
-        line.UnitPrice.Should().Be(30m, "the create snapshotted the catalog default price");
+        line.UnitPrice.Should().Be(30m, "the create snapshotted the product's selling price");
+        line.CostPrice.Should().Be(8m, "COGS is the FEFO cost captured when the vaccine was administered (no lot → product purchase price)");
         line.LineTotal.Should().Be(30m);
 
         // A second invoice for the same visit has nothing left to bill.
@@ -445,17 +445,12 @@ public sealed class InvoicesIntegrationTests
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
-        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var (warehouseId, otherProductId) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var vaccineProductId = await SeedWarehouseVaccineAsync(scope, warehouseId, 100m, purchase: 8m, selling: 30m);
         await using var factory = new VetApiFactory();
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var vaccineServiceId = Guid.CreateVersion7();
-        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح", category = "vaccination", defaultPrice = 30m }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
-        var otherServiceId = Guid.CreateVersion7();
-        (await PostAsync(client, "/admin/services", new { id = otherServiceId, nameAr = "خدمة أخرى", category = "exam", defaultPrice = 99m }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
 
         var visitId = Guid.CreateVersion7();
         (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
@@ -463,26 +458,26 @@ public sealed class InvoicesIntegrationTests
         var vaccinationId = Guid.CreateVersion7();
         (await PostAsync(client, "/vaccinations", new
         {
-            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId, price = 18m,
+            id = vaccinationId, customerId, visitId, productId = vaccineProductId, price = 18m,
             vaccineType = "لقاح", dateGiven = "2026-06-01",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // The back-linked line must agree with the vaccination's catalog vaccine.
+        // The back-linked line must agree with the vaccination's catalog vaccine product.
         var mismatchId = Guid.CreateVersion7();
         (await PostAsync(client, "/pos/invoices", new
         {
             id = mismatchId, customerId, visitId, discountAmount = 0m,
-            items = new object[] { new { serviceId = otherServiceId, vaccinationId, quantity = 1m, discountAmount = 0m } },
+            items = new object[] { new { productId = otherProductId, vaccinationId, quantity = 1m, discountAmount = 0m } },
             payments = Array.Empty<object>(),
             idempotencyKey = $"vaxmm-{mismatchId:N}",
-        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "the line's service must match the vaccination's");
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict, "the line's product must match the vaccination's");
 
         // Till-edited price/discount are honoured; the tampered quantity (5) is not.
         var invoiceId = Guid.CreateVersion7();
         (await PostAsync(client, "/pos/invoices", new
         {
             id = invoiceId, customerId, visitId, discountAmount = 0m,
-            items = new object[] { new { serviceId = vaccineServiceId, vaccinationId, quantity = 5m, unitPrice = 15m, discountAmount = 2m } },
+            items = new object[] { new { productId = vaccineProductId, vaccinationId, quantity = 5m, unitPrice = 15m, discountAmount = 2m } },
             payments = Array.Empty<object>(),
             idempotencyKey = $"vaxbl-{invoiceId:N}",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
@@ -490,6 +485,7 @@ public sealed class InvoicesIntegrationTests
         await using var db = NewContext(scope, admin.Id);
         var line = await db.InvoiceItems.AsNoTracking().SingleAsync(it => it.InvoiceId == invoiceId);
         line.VaccinationId.Should().Be(vaccinationId, "the explicit back-linked line suppresses auto-assembly");
+        line.ProductId.Should().Be(vaccineProductId);
         line.Quantity.Should().Be(1m, "a vaccination always bills as a single line");
         line.UnitPrice.Should().Be(15m, "the till's price adjustment is honoured over the snapshot");
         line.DiscountAmount.Should().Be(2m);
@@ -499,7 +495,7 @@ public sealed class InvoicesIntegrationTests
         (await PostAsync(client, "/pos/invoices", new
         {
             id = rebillId, customerId, visitId, discountAmount = 0m,
-            items = new object[] { new { serviceId = vaccineServiceId, vaccinationId, quantity = 1m, discountAmount = 0m } },
+            items = new object[] { new { productId = vaccineProductId, vaccinationId, quantity = 1m, discountAmount = 0m } },
             payments = Array.Empty<object>(),
             idempotencyKey = $"vaxrb-{rebillId:N}",
         })).StatusCode.Should().Be(HttpStatusCode.Conflict, "a vaccination can be billed once");
@@ -510,21 +506,19 @@ public sealed class InvoicesIntegrationTests
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
-        await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var (warehouseId, _) = await SeedWarehouseStockAsync(scope, 100m, purchase: 10m, selling: 25m); // POS resolves the warehouse up-front
+        var vaccineProductId = await SeedWarehouseVaccineAsync(scope, warehouseId, 100m, purchase: 8m, selling: 30m);
         await using var factory = new VetApiFactory();
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var vaccineServiceId = Guid.CreateVersion7();
-        (await PostAsync(client, "/admin/services", new { id = vaccineServiceId, nameAr = "لقاح", category = "vaccination", defaultPrice = 30m }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
         var visitId = Guid.CreateVersion7();
         (await PostAsync(client, "/visits", new { id = visitId, visitType = "in_clinic", customerId, doctorId = admin.Id, status = "in_progress" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
         var vaccinationId = Guid.CreateVersion7();
         (await PostAsync(client, "/vaccinations", new
         {
-            id = vaccinationId, customerId, visitId, serviceId = vaccineServiceId,
+            id = vaccinationId, customerId, visitId, productId = vaccineProductId,
             vaccineType = "لقاح", dateGiven = "2026-06-01",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
@@ -552,7 +546,7 @@ public sealed class InvoicesIntegrationTests
         var freeVax = Guid.CreateVersion7();
         (await PostAsync(client, "/vaccinations", new
         {
-            id = freeVax, customerId, visitId, serviceId = vaccineServiceId,
+            id = freeVax, customerId, visitId, productId = vaccineProductId,
             vaccineType = "لقاح آخر", dateGiven = "2026-06-01",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await SendAsync(client, HttpMethod.Delete, $"/vaccinations/{freeVax}", null))
@@ -949,5 +943,32 @@ public sealed class InvoicesIntegrationTests
 
         await db.SaveChangesAsync();
         return (warehouseId, productId);
+    }
+
+    /// <summary>M26 — a stocked vaccine product (category vaccine) in an existing warehouse, so
+    /// administering its vaccination FEFO-deducts a dose.</summary>
+    private static async Task<Guid> SeedWarehouseVaccineAsync(
+        PgTestScope scope, Guid warehouseId, decimal quantity, decimal purchase, decimal selling)
+    {
+        await using var db = NewContext(scope, null);
+        var now = DateTimeOffset.UtcNow;
+
+        var productId = Guid.CreateVersion7();
+        db.Products.Add(new Product
+        {
+            Id = productId, EnvironmentId = scope.EnvironmentId, NameAr = "لقاح",
+            Category = ProductCategory.Vaccine, PurchasePrice = purchase, SellingPrice = selling,
+            CreatedAt = now, UpdatedAt = now,
+        });
+
+        db.StockItems.Add(new StockItem
+        {
+            Id = Guid.CreateVersion7(), EnvironmentId = scope.EnvironmentId,
+            LocationType = StockLocation.Warehouse, LocationId = warehouseId, ProductId = productId,
+            Quantity = quantity, CreatedAt = now, UpdatedAt = now,
+        });
+
+        await db.SaveChangesAsync();
+        return productId;
     }
 }

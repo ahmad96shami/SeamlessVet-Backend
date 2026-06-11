@@ -544,6 +544,17 @@ public sealed class InvoicesService
                 .Where(p => backLinkedRxIds.Contains(p.Id) && p.DispenseType == DispenseType.AdministeredInClinic)
                 .ToDictionaryAsync(p => p.Id, p => p.ResolvedUnitCost, cancellationToken);
 
+        // M26 — a vaccination's stock also moved when it was administered (movement key vax-{id});
+        // its line snapshots the captured FEFO cost (vaccinations.resolved_unit_cost) and skips
+        // deduction, exactly like a billable in-clinic med.
+        var backLinkedVaxIds = productItems
+            .Where(it => it.VaccinationId != null).Select(it => it.VaccinationId!.Value).ToList();
+        var administeredVaxCost = backLinkedVaxIds.Count == 0
+            ? new Dictionary<Guid, decimal?>()
+            : await _db.Vaccinations.AsNoTracking()
+                .Where(v => backLinkedVaxIds.Contains(v.Id))
+                .ToDictionaryAsync(v => v.Id, v => v.ResolvedUnitCost, cancellationToken);
+
         foreach (var item in productItems)
         {
             if (item.PrescriptionId is { } linkedRx && administeredRxCost.TryGetValue(linkedRx, out var inClinicCost))
@@ -551,6 +562,18 @@ public sealed class InvoicesService
                 // Stock moved when the med was administered; snapshot the lot's FEFO cost it captured
                 // (null only for legacy rows recorded before M25 — keep the catalog-price fallback).
                 if (inClinicCost is { } captured)
+                {
+                    item.CostPrice = captured;
+                }
+
+                continue;
+            }
+
+            if (item.VaccinationId is { } linkedVax && administeredVaxCost.TryGetValue(linkedVax, out var vaxCost))
+            {
+                // Stock moved when the vaccine was administered; snapshot its captured FEFO cost
+                // (null only for a legacy/never-deducted row — keep the catalog-price fallback).
+                if (vaxCost is { } captured)
                 {
                     item.CostPrice = captured;
                 }
@@ -752,7 +775,8 @@ public sealed class InvoicesService
         }
         else if (item.VaccinationId is { } vaccinationId)
         {
-            // M22 — mirrors the procedure branch: only catalog-linked vaccinations are billable.
+            // M26 — mirrors the administered-in-clinic prescription branch: a catalog-linked
+            // vaccination bills as a PRODUCT line whose stock already moved at administration.
             if (visit is null)
             {
                 throw new ConflictException("line_backlink_requires_visit",
@@ -768,10 +792,10 @@ public sealed class InvoicesService
                     $"Vaccination '{vaccinationId}' does not belong to visit '{visit.Id}'.");
             }
 
-            if (vaccination.ServiceId is null || vaccination.ServiceId != item.ServiceId)
+            if (vaccination.ProductId is null || vaccination.ProductId != item.ProductId)
             {
-                throw new ConflictException("vaccination_service_mismatch",
-                    "The line's service_id must match the vaccination's catalog vaccine.");
+                throw new ConflictException("vaccination_product_mismatch",
+                    "The line's product_id must match the vaccination's catalog vaccine.");
             }
 
             if (await _db.InvoiceItems.AsNoTracking().AnyAsync(it => it.VaccinationId == vaccinationId, cancellationToken))
@@ -895,9 +919,11 @@ public sealed class InvoicesService
         {
             var product = await _db.Products.AsNoTracking().FirstOrDefaultAsync(p => p.Id == productId, cancellationToken)
                           ?? throw new NotFoundException("product", productId);
-            // An explicit request unit_price always wins; otherwise field invoices resolve the
-            // contract-overridden price (M8) and everything else falls back to the catalog price.
+            // An explicit request unit_price always wins; M26 — a vaccination-backed line then uses
+            // its recording-time price snapshot; otherwise field invoices resolve the contract-overridden
+            // price (M8) and everything else falls back to the catalog price.
             unitPrice = item.UnitPrice
+                ?? vaccinationPrice
                 ?? await ResolveProductUnitPriceAsync(productId, product.SellingPrice, customerId, pricingAsOf, applyContractPricing, cancellationToken);
             // M25 — placeholder; the issuance deduction loop overwrites this with the FEFO cost of the
             // lots the sale consumes (an already-administered in-clinic med keeps its captured cost).
@@ -1029,11 +1055,13 @@ public sealed class InvoicesService
             }
         }
 
-        // M22 — catalog-linked vaccinations bill exactly like procedures: one service line at the
-        // recording-time price snapshot (catalog default when the snapshot is missing). Legacy
-        // free-text vaccinations (service_id IS NULL) are clinical records only and never bill.
+        // M26 — catalog-linked vaccinations bill as a PRODUCT line (the vaccine is a stock product):
+        // one line at the recording-time price snapshot (the product's selling price when the snapshot
+        // is missing). The stock already moved when the vaccine was administered, so cost_price is the
+        // FEFO cost captured then (vaccinations.resolved_unit_cost); the issuance deduction loop skips
+        // these lines. Legacy free-text vaccinations (product_id IS NULL) are records only and never bill.
         var vaccinations = await _db.Vaccinations.AsNoTracking()
-            .Where(v => v.VisitId == visit.Id && v.ServiceId != null)
+            .Where(v => v.VisitId == visit.Id && v.ProductId != null)
             .ToListAsync(cancellationToken);
 
         if (vaccinations.Count > 0)
@@ -1046,22 +1074,26 @@ public sealed class InvoicesService
             var billedVaxSet = billedVax.ToHashSet();
             billedVaxSet.UnionWith(excludeVaccinationIds);
 
-            var serviceIds = vaccinations.Select(v => v.ServiceId!.Value).Distinct().ToList();
-            var defaultPrices = await _db.Services.AsNoTracking()
-                .Where(s => serviceIds.Contains(s.Id))
-                .ToDictionaryAsync(s => s.Id, s => s.DefaultPrice, cancellationToken);
+            var vaxProductIds = vaccinations.Select(v => v.ProductId!.Value).Distinct().ToList();
+            var vaxProducts = await _db.Products.AsNoTracking()
+                .Where(p => vaxProductIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, cancellationToken);
 
             foreach (var vaccination in vaccinations.Where(v => !billedVaxSet.Contains(v.Id)))
             {
-                var unitPrice = vaccination.Price
-                                ?? defaultPrices.GetValueOrDefault(vaccination.ServiceId!.Value);
+                if (!vaxProducts.TryGetValue(vaccination.ProductId!.Value, out var product))
+                {
+                    continue;
+                }
+
+                var unitPrice = vaccination.Price ?? product.SellingPrice;
                 lines.Add(new ResolvedLine(
-                    ProductId: null,
-                    ServiceId: vaccination.ServiceId,
+                    ProductId: vaccination.ProductId,
+                    ServiceId: null,
                     Description: vaccination.VaccineType,
                     Quantity: 1m,
                     UnitPrice: unitPrice,
-                    CostPrice: 0m,
+                    CostPrice: vaccination.ResolvedUnitCost ?? product.PurchasePrice, // captured FEFO cost; loop keeps it
                     DiscountAmount: 0m,
                     LineTotal: Money(unitPrice),
                     PrescriptionId: null,

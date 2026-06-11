@@ -36,5 +36,12 @@ public static class ProductCategory
     public const string Medication = "medication";
     public const string Product = "product";
 
-    public static readonly IReadOnlyCollection<string> All = [Medication, Product];
+    /// <summary>
+    /// M26 — vaccines are stock products (replacing the M22 vaccines-as-services model). The web
+    /// اللقاحات tab + POS vaccine chip filter the product catalog on this category; a
+    /// <see cref="Vaccination"/> links its <c>product_id</c> and deducts stock FEFO on administration.
+    /// </summary>
+    public const string Vaccine = "vaccine";
+
+    public static readonly IReadOnlyCollection<string> All = [Medication, Product, Vaccine];
 }
