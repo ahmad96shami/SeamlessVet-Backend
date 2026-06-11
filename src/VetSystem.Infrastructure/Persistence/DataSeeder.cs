@@ -323,6 +323,18 @@ public sealed class DataSeeder
             ("رباط شاش طبي", "Medical Gauze Roll", ProductCategory.Product, null, "قطعة", 2m, 5m, 30m),
             ("حقنة (سرنجة) 5 مل", "Syringe 5 ml", ProductCategory.Product, null, "قطعة", 0.3m, 1m, 100m),
             ("قفازات فحص (علبة)", "Exam Gloves Box", ProductCategory.Product, null, "علبة 100", 8m, 15m, 10m),
+            // — Vaccines (M26 — stock products of category vaccine; the web اللقاحات tab + POS chip
+            //   filter on this category, and administering one FEFO-deducts a dose) —
+            ("لقاح السعار (داء الكلب)", "Rabies Vaccine", ProductCategory.Vaccine, "MSD", "جرعة", 22m, 40m, 10m),
+            ("اللقاح الثماني للكلاب (DHPPi+L)", "Dog 8-in-1 (DHPPi+L)", ProductCategory.Vaccine, "Nobivac", "جرعة", 35m, 60m, 8m),
+            ("اللقاح الرباعي للقطط (FVRCP)", "Feline FVRCP", ProductCategory.Vaccine, "Boehringer Ingelheim", "جرعة", 32m, 55m, 8m),
+            ("لقاح السعار للقطط", "Feline Rabies", ProductCategory.Vaccine, "MSD", "جرعة", 22m, 40m, 8m),
+            ("لقاح الحمى القلاعية", "Foot-and-Mouth Disease", ProductCategory.Vaccine, "MEVAC", "قارورة 50 جرعة", 14m, 25m, 6m),
+            ("لقاح البروسيلا (Rev-1)", "Brucellosis Rev-1", ProductCategory.Vaccine, "Jovac", "قارورة 25 جرعة", 11m, 20m, 6m),
+            ("لقاح جدري الأغنام", "Sheep Pox", ProductCategory.Vaccine, "MEVAC", "قارورة 50 جرعة", 10m, 18m, 6m),
+            ("لقاح الكلوستريديا (المعوية)", "Clostridial / Enterotoxaemia", ProductCategory.Vaccine, "MSD", "قارورة 100 مل", 12m, 22m, 6m),
+            ("لقاح طاعون المجترات الصغيرة", "Peste des Petits Ruminants", ProductCategory.Vaccine, "Jovac", "قارورة 100 جرعة", 11m, 20m, 6m),
+            ("لقاح اللسان الأزرق", "Bluetongue", ProductCategory.Vaccine, "MEVAC", "قارورة 50 جرعة", 13m, 24m, 6m),
         };
 
         var added = 0;
@@ -364,8 +376,8 @@ public sealed class DataSeeder
             .Select(s => s.NameAr)
             .ToHashSetAsync(cancellationToken);
 
-        // (NameAr, NameLatin, Category, DefaultPrice). Category is a free-text display label except
-        // for ServiceCategories.Vaccination, which the M22 vaccine catalog + POS tab filter on.
+        // (NameAr, NameLatin, Category, DefaultPrice). Category is a free-text display label.
+        // M26 — vaccines are no longer services; they live in the product catalog (category vaccine).
         var seeds = new (string NameAr, string NameLatin, string Category, decimal Price)[]
         {
             // — Clinic services —
@@ -382,18 +394,6 @@ public sealed class DataSeeder
             ("زيارة مزرعة ميدانية", "Farm Field Visit", "خدمة ميدانية", 100m),
             ("فحص صحة القطيع", "Herd Health Check", "خدمة ميدانية", 150m),
             ("توليد متعسر", "Assisted Delivery", "خدمة ميدانية", 200m),
-            // — Vaccines (companion animals) —
-            ("لقاح السعار (داء الكلب)", "Rabies Vaccine", ServiceCategories.Vaccination, 40m),
-            ("اللقاح الثماني للكلاب (DHPPi+L)", "Dog 8-in-1 (DHPPi+L)", ServiceCategories.Vaccination, 60m),
-            ("اللقاح الرباعي للقطط (FVRCP)", "Feline FVRCP", ServiceCategories.Vaccination, 55m),
-            ("لقاح السعار للقطط", "Feline Rabies", ServiceCategories.Vaccination, 40m),
-            // — Vaccines (livestock) —
-            ("لقاح الحمى القلاعية", "Foot-and-Mouth Disease", ServiceCategories.Vaccination, 25m),
-            ("لقاح البروسيلا (Rev-1)", "Brucellosis Rev-1", ServiceCategories.Vaccination, 20m),
-            ("لقاح جدري الأغنام", "Sheep Pox", ServiceCategories.Vaccination, 18m),
-            ("لقاح الكلوستريديا (المعوية)", "Clostridial / Enterotoxaemia", ServiceCategories.Vaccination, 22m),
-            ("لقاح طاعون المجترات الصغيرة", "Peste des Petits Ruminants", ServiceCategories.Vaccination, 20m),
-            ("لقاح اللسان الأزرق", "Bluetongue", ServiceCategories.Vaccination, 24m),
         };
 
         var added = 0;
