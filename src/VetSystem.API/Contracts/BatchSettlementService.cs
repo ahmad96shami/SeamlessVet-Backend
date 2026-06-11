@@ -69,8 +69,9 @@ public sealed class BatchSettlementService
         var settlement = await _db.BatchSettlements.AsNoTracking()
             .FirstOrDefaultAsync(s => s.BatchId == batchId, cancellationToken);
 
-        var entitlementFrozen = await _db.DoctorEntitlements.AsNoTracking()
-            .AnyAsync(e => e.BatchId == batchId && e.Status != EntitlementStatus.Pending, cancellationToken);
+        // M30 — the approve/pay lifecycle is gone, so an entitlement can never freeze a re-settle.
+        // The response field is kept (always false) until the web settle page drops it (W22).
+        const bool entitlementFrozen = false;
 
         var ledgerId = await _ownerLedgers.ResolveAsync(batch.CustomerId, batch.FarmId, cancellationToken);
         var ledger = ledgerId is { } lid
@@ -166,14 +167,6 @@ public sealed class BatchSettlementService
         if (await _db.BatchSettlements.AnyAsync(s => s.BatchId == batchId, cancellationToken))
         {
             throw new ConflictException("batch_already_settled", "This batch already has a settlement.");
-        }
-
-        // Approved/paid figures are frozen (M9) — re-pricing underneath them is forbidden.
-        if (await _db.DoctorEntitlements.AnyAsync(
-                e => e.BatchId == batchId && e.Status != EntitlementStatus.Pending, cancellationToken))
-        {
-            throw new ConflictException("entitlement_frozen",
-                "The doctor's entitlement for this batch is already approved/paid; the figures are frozen.");
         }
 
         var ledgerId = await _ownerLedgers.ResolveAsync(batch.CustomerId, batch.FarmId, cancellationToken)

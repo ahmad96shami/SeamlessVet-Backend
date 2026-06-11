@@ -107,9 +107,6 @@ public static class ReportLabels
     public const string VaccineType = "نوع اللقاح";
     public const string DateGiven = "تاريخ الإعطاء";
     public const string NextDueDate = "تاريخ الاستحقاق";
-    public const string ApprovedAt = "تاريخ الاعتماد";
-    public const string PaidAt = "تاريخ الدفع";
-    public const string PaidMethod = "طريقة الصرف";
 
     public const string Yes = "نعم";
     public const string No = "لا";
@@ -121,7 +118,6 @@ public static class ReportLabels
     public static string VisitType(string? code) => Lookup(VisitTypes, code);
     public static string VisitStatus(string? code) => Lookup(VisitStatuses, code);
     public static string InvoiceStatus(string? code) => Lookup(InvoiceStatuses, code);
-    public static string EntitlementStatus(string? code) => Lookup(EntitlementStatuses, code);
     public static string EntitlementSystem(string? code) => Lookup(EntitlementSystems, code);
     public static string MovementType(string? code) => Lookup(MovementTypes, code);
     public static string LocationType(string? code) => Lookup(LocationTypes, code);
@@ -160,13 +156,6 @@ public static class ReportLabels
         [Codes.InvoiceStatus.Issued] = "صادرة",
         [Codes.InvoiceStatus.Flagged] = "معلّمة",
         [Codes.InvoiceStatus.Void] = "ملغاة",
-    };
-
-    private static readonly IReadOnlyDictionary<string, string> EntitlementStatuses = new Dictionary<string, string>
-    {
-        [Codes.EntitlementStatus.Pending] = "قيد الانتظار",
-        [Codes.EntitlementStatus.Approved] = "معتمدة",
-        [Codes.EntitlementStatus.Paid] = "مدفوعة",
     };
 
     private static readonly IReadOnlyDictionary<string, string> EntitlementSystems = new Dictionary<string, string>

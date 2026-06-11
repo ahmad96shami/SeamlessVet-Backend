@@ -59,8 +59,11 @@ public sealed class KpiSummaryReportService
             .Where(i => i.Status == InvoiceStatus.Issued && i.VoidOfInvoiceId is null && !voidedOriginalIds.Contains(i.Id))
             .Sum(i => i.Total - i.TaxAmount);
 
-        var pendingEntitlements = await _db.DoctorEntitlements.AsNoTracking()
-            .CountAsync(e => e.Status == EntitlementStatus.Pending, cancellationToken);
+        // M30 — the approve/pay lifecycle is gone; "pending entitlements" is now the count of
+        // doctor-partners the clinic still owes (an outstanding entitlement payable). The DTO field name
+        // is kept until the web dashboard renames it (W22).
+        var pendingEntitlements = await _db.DoctorPartnerLedgers.AsNoTracking()
+            .CountAsync(l => l.Status == LedgerStatus.HasDebt, cancellationToken);
 
         var lowStock = await _inventoryScan.ScanLowStockAsync(envId, cancellationToken);
 

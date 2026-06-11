@@ -140,19 +140,12 @@ public static class ReportDocuments
                     new ReportColumn(ReportLabels.Doctor, ReportCellKind.Text),
                     new ReportColumn(ReportLabels.System, ReportCellKind.Text),
                     new ReportColumn(ReportLabels.Amount, ReportCellKind.Money),
-                    new ReportColumn(ReportLabels.Status, ReportCellKind.Text),
-                    new ReportColumn(ReportLabels.ApprovedAt, ReportCellKind.Text),
-                    new ReportColumn(ReportLabels.PaidAt, ReportCellKind.Text),
-                    new ReportColumn(ReportLabels.PaidMethod, ReportCellKind.Text),
                 ],
+                // M30 — entitlements are batch-only accrual rows; the approve/pay lifecycle columns are gone.
                 Rows: rows.Select(e => Row(
                     ReportCell.Id(e.DoctorId),
                     ReportCell.Text(ReportLabels.EntitlementSystem(e.CalculationSystem)),
-                    ReportCell.Money(e.ComputedAmount),
-                    ReportCell.Text(ReportLabels.EntitlementStatus(e.Status)),
-                    ReportCell.Moment(e.ApprovedAt),
-                    ReportCell.Moment(e.PaidAt),
-                    ReportCell.Text(e.PaidMethod is null ? "—" : ReportLabels.PaymentMethod(e.PaidMethod)))).ToList()),
+                    ReportCell.Money(e.ComputedAmount))).ToList()),
         ]);
 
     // ----- M12 task 7: sales --------------------------------------------------------------------

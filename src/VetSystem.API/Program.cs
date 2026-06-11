@@ -214,8 +214,6 @@ builder.Services.AddSingleton<VetSystem.Application.Entitlements.IEntitlementTog
     VetSystem.Application.Entitlements.EntitlementToggleResolver>();
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISystemBDirectFeeCalculator,
     VetSystem.Application.Entitlements.SystemBDirectFeeCalculator>();
-builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISettlementLockGuard,
-    VetSystem.Application.Entitlements.SettlementLockGuard>();
 builder.Services.AddScoped<VetSystem.Application.Entitlements.IEntitlementService,
     VetSystem.Infrastructure.Entitlements.EntitlementService>();
 builder.Services.AddScoped<VetSystem.API.Entitlements.EntitlementSettlementService>();

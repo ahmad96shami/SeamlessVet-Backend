@@ -90,10 +90,9 @@ public sealed class BatchSettlementIntegrationTests
             adjustments.Single(e => e.IdempotencyKey == $"settle-reprice-{settlement.Id:N}").Amount.Should().Be(-70m);
             adjustments.Single(e => e.IdempotencyKey == $"settle-discount-{settlement.Id:N}").Amount.Should().Be(-30m);
 
-            // The cycle closed and the pending entitlement is on the settled numbers.
+            // The cycle closed and the entitlement is computed on the settled numbers (M30 — at settle).
             (await db.Batches.AsNoTracking().SingleAsync(b => b.Id == batchId)).Status.Should().Be(BatchStatus.Closed);
             var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
-            entitlement.Status.Should().Be(EntitlementStatus.Pending);
             entitlement.ComputedAmount.Should().Be(20m, "M28 — the entitlement is the supervision fee in full");
         }
 
@@ -221,7 +220,7 @@ public sealed class BatchSettlementIntegrationTests
     }
 
     [Fact]
-    public async Task Settle_Guards_ClosedLedger_AndFrozenEntitlement()
+    public async Task Settle_Guards_ClosedLedger()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -232,16 +231,15 @@ public sealed class BatchSettlementIntegrationTests
         var (customerId, farmId, batchId) = await SeedFarmBatchAsync(client, admin.Id);
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 250m);
 
-        // Pay in full, close the batch (plain PATCH), close the farm, approve the entitlement.
+        // Pay in full, then close the farm account (M30 — closing no longer computes entitlements).
         (await PostAsync(client, "/receipt-vouchers", new
         {
             id = Guid.CreateVersion7(), customerId, farmId, amount = 250m, method = "cash",
             idempotencyKey = $"rv-{farmId:N}",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await PostAsync(client, $"/farms/{farmId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Closed owner ledger blocks the settle outright.
+        // A closed owner ledger blocks the settle outright (re-open it first to settle).
         var onClosed = await PostAsync(client, $"/batches/{batchId}/settle", new
         {
             lines = new[] { new { productId, settledUnitPrice = 20m } },
@@ -250,24 +248,6 @@ public sealed class BatchSettlementIntegrationTests
         });
         onClosed.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await onClosed.Content.ReadAsStringAsync()).Should().Contain("owner_ledger_closed");
-
-        // Approve (now released), then re-open the farm: the frozen entitlement still blocks re-pricing.
-        Guid entitlementId;
-        await using (var db = NewContext(scope, admin.Id))
-        {
-            entitlementId = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId)).Id;
-        }
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementId}/approve", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/farms/{farmId}/reopen-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var onFrozen = await PostAsync(client, $"/batches/{batchId}/settle", new
-        {
-            lines = new[] { new { productId, settledUnitPrice = 20m } },
-            discountAmount = 0m,
-            idempotencyKey = $"settle-frozen-{batchId:N}",
-        });
-        onFrozen.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await onFrozen.Content.ReadAsStringAsync()).Should().Contain("entitlement_frozen");
     }
 
     [Fact]

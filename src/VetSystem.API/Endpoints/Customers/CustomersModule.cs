@@ -49,17 +49,18 @@ public sealed class CustomersModule : IEndpointModule
         group.MapGet("/{id:guid}/statement", Statement)
             .WithName("Customers_Statement");
 
-        // M9 task 9 — close the account (zero-balance only) and trigger the entitlement settlement
-        // workflow (PRD §7.7). Payout authority, so gated on entitlements.approve.
+        // M9 task 9 — close the account (zero-balance only). M30 — the settlement lock is gone, so this
+        // just finalizes the ledger. Settlement authority, gated on contracts.activate (the same
+        // Admin/Accountant gate as batch settlement, which now releases entitlements).
         group.MapPost("/{id:guid}/close-account", CloseAccount)
-            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .RequirePermission(PermissionKey.ContractsActivate)
             .AddEndpointFilter(new IdempotencyKeyFilter("close_account"))
             .WithName("Customers_CloseAccount");
 
         // Re-open a settled (closed) own ledger so a returning customer's new visit can be billed.
         // Same settlement authority as close; idempotent.
         group.MapPost("/{id:guid}/reopen-account", ReopenAccount)
-            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .RequirePermission(PermissionKey.ContractsActivate)
             .AddEndpointFilter(new IdempotencyKeyFilter("reopen_account"))
             .WithName("Customers_ReopenAccount");
     }

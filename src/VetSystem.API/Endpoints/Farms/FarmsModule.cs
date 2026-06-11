@@ -49,16 +49,16 @@ public sealed class FarmsModule : IEndpointModule
         group.MapGet("/{id:guid}/statement", Statement)
             .WithName("Farms_Statement");
 
-        // M16 — close the farm's account (zero-balance only) and compute its entitlements. Payout
-        // authority, so gated on entitlements.approve like the customer close.
+        // M16 — close the farm's account (zero-balance only). M30 — the settlement lock is gone; this
+        // just finalizes the ledger. Gated on contracts.activate like the customer close.
         group.MapPost("/{id:guid}/close-account", CloseAccount)
-            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .RequirePermission(PermissionKey.ContractsActivate)
             .AddEndpointFilter(new IdempotencyKeyFilter("close_farm_account"))
             .WithName("Farms_CloseAccount");
 
         // M16 — re-open a settled (closed) farm ledger so its new visits can be billed (mirror of close).
         group.MapPost("/{id:guid}/reopen-account", ReopenAccount)
-            .RequirePermission(PermissionKey.EntitlementsApprove)
+            .RequirePermission(PermissionKey.ContractsActivate)
             .AddEndpointFilter(new IdempotencyKeyFilter("reopen_farm_account"))
             .WithName("Farms_ReopenAccount");
     }

@@ -16,9 +16,9 @@ namespace VetSystem.Tests.Reports;
 /// M12 task 17 + M28 — the profit-per-batch report must agree with the entitlement calculation on the
 /// same inputs to the cent (exit criterion). Both flow through
 /// <c>IEntitlementService.ExplainForBatchAsync</c>, so this seeds a real batch + invoice over Postgres,
-/// closes it to persist the entitlement, then asserts the report's doctor/clinic split matches the
-/// persisted <c>computed_amount</c> exactly — under both System A (fee carved from drug profit) and
-/// System B (fee charged on top).
+/// settles it to persist the entitlement (M30 — the row is written at settlement), then asserts the
+/// report's doctor/clinic split matches the persisted <c>computed_amount</c> exactly — under both
+/// System A (fee carved from drug profit) and System B (fee charged on top).
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class ProfitPerBatchReconciliationTests
@@ -37,7 +37,8 @@ public sealed class ProfitPerBatchReconciliationTests
             feeModel: FeeModel.FixedAmount, feeValue: 20m);
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("cash", 250m)]);
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await CreateDoctorPartnerAsync(client, admin.Id);
+        await SettleAsync(client, batchId);
 
         // M28 — the supervision fee IS the entitlement: fixed fee 20 ⇒ the doctor is owed 20 in full
         // (profit = (25−10)×10 = 150 funds it; System A carves it from the clinic's margin, no clamp).
@@ -80,7 +81,8 @@ public sealed class ProfitPerBatchReconciliationTests
             feeModel: FeeModel.FixedAmount, feeValue: 20m, entitlementSystem: "direct_fee");
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("cash", 250m)]);
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        await CreateDoctorPartnerAsync(client, admin.Id);
+        await SettleAsync(client, batchId);
 
         decimal persistedShare;
         await using (var db = NewContext(scope, admin.Id))
@@ -100,6 +102,22 @@ public sealed class ProfitPerBatchReconciliationTests
     }
 
     // ---- helpers ----
+
+    private static async Task CreateDoctorPartnerAsync(HttpClient client, Guid userId)
+    {
+        (await PostAsync(client, "/doctor-partners", new { id = Guid.CreateVersion7(), userId }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    private static async Task SettleAsync(HttpClient client, Guid batchId)
+    {
+        (await PostAsync(client, $"/batches/{batchId}/settle", new
+        {
+            lines = Array.Empty<object>(),
+            discountAmount = 0m,
+            idempotencyKey = $"settle-{batchId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+    }
 
     private static async Task<ProfitPerBatchReportResponse> GetReportAsync(HttpClient client, Guid batchId)
     {

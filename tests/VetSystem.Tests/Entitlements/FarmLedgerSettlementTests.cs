@@ -15,8 +15,9 @@ namespace VetSystem.Tests.Entitlements;
 /// <summary>
 /// M16 — per-farm ledgers + settlement at farm granularity. Verifies charge routing (a farm-scoped
 /// charge posts to the farm ledger, a clinic charge to the customer's own ledger), the customer's
-/// aggregate balance (own + Σ farms), and that the settlement lock binds the relevant <b>farm</b>
-/// ledger: closing one farm releases only its entitlements and never closes the owning customer.
+/// aggregate balance (own + Σ farms), and that each <b>farm</b> ledger closes independently: closing one
+/// farm never closes the other or the owning customer. (M30 — the settlement lock is gone; closing a
+/// ledger no longer gates entitlements.)
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class FarmLedgerSettlementTests
@@ -80,7 +81,7 @@ public sealed class FarmLedgerSettlementTests
     }
 
     [Fact]
-    public async Task ClosingFarmA_ReleasesOnlyFarmA_LeavesFarmBLockedAndCustomerOpen()
+    public async Task ClosingFarmA_ClosesOnlyFarmA_LeavesFarmBOwing_AndCustomerOpen()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -99,18 +100,7 @@ public sealed class FarmLedgerSettlementTests
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmA, batchA, productId, quantity: 10m);
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmB, batchB, productId, quantity: 10m);
 
-        // Close both cycles → a pending entitlement per batch (M28 — the supervision fee 20 in full).
-        (await PatchAsync(client, $"/batches/{batchA}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PatchAsync(client, $"/batches/{batchB}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        Guid entitlementA, entitlementB;
-        await using (var db = NewContext(scope, admin.Id))
-        {
-            entitlementA = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchA)).Id;
-            entitlementB = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchB)).Id;
-        }
-
-        // Settle farm A in full (a farm-scoped receipt voucher), then close farm A.
+        // Pay farm A in full (a farm-scoped receipt voucher), then close farm A's ledger.
         (await PostAsync(client, "/receipt-vouchers", new
         {
             id = Guid.CreateVersion7(),
@@ -123,24 +113,13 @@ public sealed class FarmLedgerSettlementTests
 
         (await PostAsync(client, $"/farms/{farmA}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Farm A's entitlement releases; farm B's stays locked (its ledger still owes 250).
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementA}/approve", null))
-            .StatusCode.Should().Be(HttpStatusCode.OK, "farm A's ledger is closed");
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementB}/approve", null))
-            .StatusCode.Should().Be(HttpStatusCode.Conflict, "farm B's ledger is not closed");
-
-        // Farm B cannot be closed with an outstanding balance.
+        // Farm B cannot be closed with an outstanding balance (the zero-balance gate survives M30).
         (await PostAsync(client, $"/farms/{farmB}/close-account", null))
             .StatusCode.Should().Be(HttpStatusCode.Conflict, "farm B still owes 250");
 
         await using (var verify = NewContext(scope, admin.Id))
         {
-            (await verify.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.Id == entitlementA)).Status
-                .Should().Be(EntitlementStatus.Approved);
-            (await verify.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.Id == entitlementB)).Status
-                .Should().Be(EntitlementStatus.Pending);
-
-            // The customer stays open: farm A closed, farm B still owes.
+            // Farm A closed, farm B still owes — the customer stays open.
             (await verify.Ledgers.AsNoTracking().Where(l => l.FarmId == farmA).Select(l => l.Status).SingleAsync())
                 .Should().Be(LedgerStatus.Closed);
             (await verify.Ledgers.AsNoTracking().Where(l => l.FarmId == farmB).Select(l => l.Status).SingleAsync())

@@ -12,16 +12,16 @@ using VetSystem.Tests.Infrastructure;
 namespace VetSystem.Tests.Entitlements;
 
 /// <summary>
-/// M9 tasks 18–21 + exit criteria — the settlement lifecycle against the API over a real Postgres env:
-/// batch close computes a pending entitlement, the settlement lock blocks approval until the customer
-/// account closes in full, only a zero balance closes it, and approve→pay then disburses. System B is
-/// exercised via a standalone exam-fee invoice.
+/// M30 — the account lifecycle after the settlement lock was removed. Closing a customer/farm account
+/// finalizes the ledger (zero-balance gate survives) but no longer computes or releases entitlements:
+/// those are computed and credited to the doctor-partner ledger when a batch is <b>settled</b> (تصفية).
+/// The per-visit entitlement and the approve/pay endpoints are gone.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class EntitlementSettlementIntegrationTests
 {
     [Fact]
-    public async Task FullLifecycle_BatchDrugProfit_CloseBatch_CloseAccount_Approve_Pay()
+    public async Task CloseAccount_ClosesLedger_WithoutComputingEntitlements()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -30,50 +30,67 @@ public sealed class EntitlementSettlementIntegrationTests
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m);
+        var batchId = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
-        // Field visit → field invoice linked to the batch, paid in full (ledger nets to zero).
+        // Field sale linked to the batch, paid in full → the ledger nets to zero.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
-            payments: [("cash", 250m)]); // 10 × 25 = 250 → fully settled
+            payments: [("cash", 250m)]);
 
-        // Close the cycle: computes the responsible doctor's entitlement as pending (PRD §7.8).
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
+        // Closing the batch is a plain status flip (no entitlement compute, M30).
+        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        Guid entitlementId;
-        await using (var db = NewContext(scope, admin.Id))
-        {
-            var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId);
-            entitlement.Status.Should().Be(EntitlementStatus.Pending);
-            entitlement.CalculationSystem.Should().Be(EntitlementSystem.DrugProfit);
-            entitlement.DoctorId.Should().Be(admin.Id);
-            // M28 — the supervision fee IS the entitlement: fixed fee 20 ⇒ the doctor is owed 20 in full
-            // (drug profit (25 − 10) × 10 = 150 funds it from the clinic's margin under System A).
-            entitlement.ComputedAmount.Should().Be(20m);
-            entitlementId = entitlement.Id;
-        }
-
-        // Account fully settled → close it, then approve + pay the entitlement.
+        // Close the account → the ledger is finalized, but no entitlement is computed/released.
         (await PostAsync(client, $"/customers/{customerId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementId}/approve", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementId}/pay", new { method = "bank_transfer" }))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
 
-        await using var verify = NewContext(scope, admin.Id);
-        var paid = await verify.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.Id == entitlementId);
-        paid.Status.Should().Be(EntitlementStatus.Paid);
-        paid.ApprovedBy.Should().Be(admin.Id);
-        paid.ApprovedAt.Should().NotBeNull();
-        paid.PaidAt.Should().NotBeNull();
-        paid.PaidMethod.Should().Be(PaymentMethod.BankTransfer);
-
-        (await verify.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
+        await using var db = NewContext(scope, admin.Id);
+        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
             .Should().Be(LedgerStatus.Closed);
+        (await db.DoctorEntitlements.AsNoTracking().AnyAsync(e => e.BatchId == batchId))
+            .Should().BeFalse("entitlements are computed at settlement, not at batch/account close");
     }
 
     [Fact]
-    public async Task SystemB_StandaloneExamFee_CreditsDoctorInFull_OnAccountClose()
+    public async Task CloseAccount_WithOutstandingBalance_IsRejected_AndLedgerStaysOpen()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var (_, productId) = await SeedFieldStockAsync(scope, admin.Id, quantity: 100m, purchase: 10m, selling: 25m);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = await CreateCustomerAsync(client);
+        var batchId = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
+
+        // Sold on credit → the ledger carries a debt.
+        await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
+            payments: [("credit", 250m)]);
+
+        var rejected = await PostAsync(client, $"/customers/{customerId}/close-account", null);
+        rejected.StatusCode.Should().Be(HttpStatusCode.Conflict, "a non-zero balance cannot be closed");
+        (await rejected.Content.ReadAsStringAsync()).Should().Contain("account_not_settled");
+
+        await using var db = NewContext(scope, admin.Id);
+        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
+            .Should().NotBe(LedgerStatus.Closed);
+    }
+
+    [Fact]
+    public async Task Approve_And_Pay_Endpoints_AreRemoved()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var anyId = Guid.CreateVersion7();
+        (await PostAsync(client, $"/doctor-entitlements/{anyId}/approve", null))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound, "the approve lifecycle endpoint was removed in M30");
+        (await PostAsync(client, $"/doctor-entitlements/{anyId}/pay", new { method = "cash" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound, "the pay lifecycle endpoint was removed in M30");
+    }
+
+    [Fact]
+    public async Task NonBatchFieldVisit_ExamFee_CreatesNoEntitlement()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -82,7 +99,8 @@ public sealed class EntitlementSettlementIntegrationTests
 
         var customerId = await CreateCustomerAsync(client);
 
-        // A completed, non-batch visit with a standalone exam-fee invoice, paid in full.
+        // A completed, non-batch field visit charges a standalone exam fee — but produces no entitlement
+        // (M30 removed the per-visit System-B entitlement).
         var visitId = Guid.CreateVersion7();
         (await PostAsync(client, "/visits", new { id = visitId, visitType = "field", customerId, doctorId = admin.Id, status = "in_progress" }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
@@ -95,95 +113,11 @@ public sealed class EntitlementSettlementIntegrationTests
         })).StatusCode.Should().Be(HttpStatusCode.OK);
         (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Close the account → the settlement workflow computes the System B visit entitlement.
         (await PostAsync(client, $"/customers/{customerId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         await using var db = NewContext(scope, admin.Id);
-        var entitlement = await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.VisitId == visitId);
-        entitlement.CalculationSystem.Should().Be(EntitlementSystem.DirectFee);
-        entitlement.ComputedAmount.Should().Be(80m, "System B credits the full exam fee to the doctor");
-    }
-
-    [Fact]
-    public async Task CloseAccount_WithOutstandingBalance_IsRejected_EntitlementStaysPending()
-    {
-        await using var scope = await PgTestScope.CreateAsync();
-        var admin = await AdminTestSeed.SeedAdminAsync(scope);
-        var (_, productId) = await SeedFieldStockAsync(scope, admin.Id, quantity: 100m, purchase: 10m, selling: 25m);
-        await using var factory = new VetApiFactory();
-        using var client = AuthedClient(factory, admin);
-
-        var customerId = await CreateCustomerAsync(client);
-        var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m);
-
-        // Sold on credit → the ledger carries a debt.
-        await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
-            payments: [("credit", 250m)]);
-
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var rejected = await PostAsync(client, $"/customers/{customerId}/close-account", null);
-        rejected.StatusCode.Should().Be(HttpStatusCode.Conflict, "a non-zero balance cannot be closed (partial payments do not release)");
-
-        await using var db = NewContext(scope, admin.Id);
-        (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId)).Status
-            .Should().Be(EntitlementStatus.Pending);
-        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
-            .Should().NotBe(LedgerStatus.Closed);
-    }
-
-    [Fact]
-    public async Task PartialPayment_ThenApprove_IsRejected_OnlyFullSettlementReleases()
-    {
-        await using var scope = await PgTestScope.CreateAsync();
-        var admin = await AdminTestSeed.SeedAdminAsync(scope);
-        var (_, productId) = await SeedFieldStockAsync(scope, admin.Id, quantity: 100m, purchase: 10m, selling: 25m);
-        await using var factory = new VetApiFactory();
-        using var client = AuthedClient(factory, admin);
-
-        var customerId = await CreateCustomerAsync(client);
-        var batchId = await CreateBatchAsync(client, customerId, admin.Id,
-            feeModel: FeeModel.FixedAmount, feeValue: 20m);
-
-        // 250 total, only 100 paid → 150 still outstanding.
-        await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
-            payments: [("cash", 100m)]);
-        (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        Guid entitlementId;
-        await using (var db = NewContext(scope, admin.Id))
-        {
-            entitlementId = (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.BatchId == batchId)).Id;
-        }
-
-        // Partial settlement does NOT release: approval is locked.
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementId}/approve", null))
-            .StatusCode.Should().Be(HttpStatusCode.Conflict, "the account is not closed");
-
-        await using (var db = NewContext(scope, admin.Id))
-        {
-            (await db.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.Id == entitlementId)).Status
-                .Should().Be(EntitlementStatus.Pending);
-        }
-
-        // Pay the remaining 150 (Sanad Qabd) → balance zero → account closes → approval released.
-        (await PostAsync(client, "/receipt-vouchers", new
-        {
-            id = Guid.CreateVersion7(),
-            customerId,
-            amount = 150m,
-            method = "cash",
-            idempotencyKey = $"rv-{customerId:N}",
-        })).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        (await PostAsync(client, $"/customers/{customerId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
-        (await PostAsync(client, $"/doctor-entitlements/{entitlementId}/approve", null))
-            .StatusCode.Should().Be(HttpStatusCode.OK, "the account is now closed in full");
-
-        await using var verify = NewContext(scope, admin.Id);
-        (await verify.DoctorEntitlements.AsNoTracking().SingleAsync(e => e.Id == entitlementId)).Status
-            .Should().Be(EntitlementStatus.Approved);
+        (await db.DoctorEntitlements.AsNoTracking().AnyAsync())
+            .Should().BeFalse("a non-batch field visit's exam fee no longer creates an entitlement");
     }
 
     // ---- helpers ----

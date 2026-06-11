@@ -143,13 +143,12 @@ public sealed class ReportsModule : IEndpointModule
         EntitlementSettlementService svc,
         ReportExporter export,
         Guid? doctorId,
-        string? status,
         int? skip,
         int? take,
         string? format,
         CancellationToken cancellationToken)
     {
-        var items = await svc.ListAsync(doctorId, status, skip, take, cancellationToken);
+        var items = await svc.ListAsync(doctorId, skip, take, cancellationToken);
         return export.Resolve(format, items, ReportDocuments.DoctorEntitlements);
     }
 

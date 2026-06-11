@@ -672,7 +672,6 @@ public sealed class DataSeeder
                 PermissionKey.CustomersWrite,
                 PermissionKey.ContractsWrite,
                 PermissionKey.ContractsActivate,
-                PermissionKey.EntitlementsApprove,
                 // M19: the accountant manages suppliers, records purchase invoices, and pays suppliers.
                 PermissionKey.SuppliersWrite,
                 // M30: the accountant manages doctor-partners and pays their entitlement balances.
@@ -728,7 +727,6 @@ public sealed class DataSeeder
         PermissionKey.InvoicesRefund => "Refund issued invoices.",
         PermissionKey.InvoicesVoid => "Void issued invoices.",
         PermissionKey.InventoryAdjust => "Apply inventory adjustments.",
-        PermissionKey.EntitlementsApprove => "Close customer accounts and approve/pay doctor entitlements.",
         PermissionKey.PartnershipManage => "Manage partners and partnership profit shares (partnership environments only).",
         PermissionKey.ReportsRead => "View operational and financial reports.",
         PermissionKey.SuppliersWrite => "Manage suppliers, record purchase invoices, and pay suppliers.",

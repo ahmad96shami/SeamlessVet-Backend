@@ -9,16 +9,15 @@ using VetSystem.Infrastructure.Persistence;
 namespace VetSystem.Infrastructure.Entitlements;
 
 /// <summary>
-/// Computes <see cref="DoctorEntitlement"/> rows (M9 task 8). The pure calculators (exam-fee models,
-/// System A, System B) and the toggle resolver do the arithmetic; this service supplies their inputs
-/// from the database — the batch config, its (non-void) invoices and line cost snapshots, and the
-/// <c>sale_value</c> (the settled price where the batch is settled, else the billed line unit_price —
-/// M29 removed the contract-overridden tier; SCHEMA invariant #8).
+/// Computes <see cref="DoctorEntitlement"/> rows (M9 task 8; M30 — batch-only). The pure calculators
+/// (exam-fee models, the M28 split) and the toggle resolver do the arithmetic; this service supplies
+/// their inputs from the database — the batch config, its (non-void) invoices and line cost snapshots,
+/// and the <c>sale_value</c> (the settled price where the batch is settled, else the billed line
+/// unit_price — M29 removed the contract-overridden tier; SCHEMA invariant #8).
 ///
-/// <para>Idempotent per source: one entitlement per batch / per visit. A re-run refreshes the figures
-/// on a still-<c>pending</c> row and is a no-op once the row is approved/paid (settled figures are
-/// frozen). Always writes the row in <c>pending</c> status — releasing it is the settlement workflow's
-/// job, gated by <see cref="ISettlementLockGuard"/>.</para>
+/// <para>Idempotent per batch: one entitlement per batch, refreshed on a re-run. The settlement
+/// workflow calls this once when the batch is settled; the row is an immutable accrual audit and the
+/// same amount is credited to the doctor-partner ledger (M30).</para>
 /// </summary>
 public sealed class EntitlementService : IEntitlementService
 {
@@ -26,20 +25,17 @@ public sealed class EntitlementService : IEntitlementService
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IExamFeeCalculatorFactory _examFees;
     private readonly IEntitlementToggleResolver _toggle;
-    private readonly ISystemBDirectFeeCalculator _systemB;
 
     public EntitlementService(
         ApplicationDbContext db,
         ICurrentUserAccessor currentUser,
         IExamFeeCalculatorFactory examFees,
-        IEntitlementToggleResolver toggle,
-        ISystemBDirectFeeCalculator systemB)
+        IEntitlementToggleResolver toggle)
     {
         _db = db;
         _currentUser = currentUser;
         _examFees = examFees;
         _toggle = toggle;
-        _systemB = systemB;
     }
 
     public async Task<DoctorEntitlement> ComputeForBatchAsync(Guid batchId, CancellationToken cancellationToken)
@@ -47,10 +43,8 @@ public sealed class EntitlementService : IEntitlementService
         var breakdown = await ExplainForBatchAsync(batchId, cancellationToken);
 
         return await UpsertAsync(
-            e => e.BatchId == batchId,
+            batchId,
             breakdown.DoctorId,
-            batchId: batchId,
-            visitId: null,
             breakdown.System,
             breakdown.DoctorShare,
             cancellationToken);
@@ -130,34 +124,6 @@ public sealed class EntitlementService : IEntitlementService
             SettlementDiscount: discountAmount);
     }
 
-    public async Task<DoctorEntitlement?> ComputeForVisitAsync(Guid visitId, CancellationToken cancellationToken)
-    {
-        var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
-                    ?? throw new NotFoundException("visit", visitId);
-
-        // Visit-sourced entitlement is System B: the standalone exam-fee invoice(s) credited in full.
-        var (examInvoices, _) = await LoadEffectiveInvoicesAsync(
-            i => i.VisitId == visitId && i.InvoiceType == InvoiceType.ExamFee, cancellationToken);
-        var fee = examInvoices.Values.Sum(i => i.Total);
-
-        if (fee <= 0m)
-        {
-            return null; // no exam-fee basis ⇒ nothing to credit
-        }
-
-        var enabled = _toggle.IsEnabled(perBatchOverride: null, await GlobalToggleAsync(cancellationToken));
-        var computedAmount = enabled ? _systemB.Calculate(fee).ComputedAmount : 0m;
-
-        return await UpsertAsync(
-            e => e.VisitId == visitId,
-            visit.DoctorId,
-            batchId: null,
-            visitId: visitId,
-            EntitlementSystem.DirectFee,
-            computedAmount,
-            cancellationToken);
-    }
-
     /// <summary>Shared void-aware loader (M24 extraction) — see <see cref="EffectiveInvoices"/>.</summary>
     private Task<(Dictionary<Guid, Invoice> Invoices, List<InvoiceItem> ProductItems)> LoadEffectiveInvoicesAsync(
         System.Linq.Expressions.Expression<Func<Invoice, bool>> predicate, CancellationToken cancellationToken)
@@ -177,24 +143,16 @@ public sealed class EntitlementService : IEntitlementService
     }
 
     private async Task<DoctorEntitlement> UpsertAsync(
-        System.Linq.Expressions.Expression<Func<DoctorEntitlement, bool>> match,
+        Guid batchId,
         Guid doctorId,
-        Guid? batchId,
-        Guid? visitId,
         string system,
         decimal computedAmount,
         CancellationToken cancellationToken)
     {
-        var existing = await _db.DoctorEntitlements.FirstOrDefaultAsync(match, cancellationToken);
+        var existing = await _db.DoctorEntitlements.FirstOrDefaultAsync(e => e.BatchId == batchId, cancellationToken);
 
         if (existing is not null)
         {
-            // Frozen once settled — never recompute an approved/paid entitlement.
-            if (existing.Status != EntitlementStatus.Pending)
-            {
-                return existing;
-            }
-
             existing.DoctorId = doctorId;
             existing.CalculationSystem = system;
             existing.ComputedAmount = computedAmount;
@@ -207,10 +165,8 @@ public sealed class EntitlementService : IEntitlementService
             Id = Guid.Empty,
             DoctorId = doctorId,
             BatchId = batchId,
-            VisitId = visitId,
             CalculationSystem = system,
             ComputedAmount = computedAmount,
-            Status = EntitlementStatus.Pending,
         };
 
         _db.DoctorEntitlements.Add(entitlement);

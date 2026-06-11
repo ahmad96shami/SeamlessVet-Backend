@@ -154,12 +154,10 @@ public sealed class ReportExportTests
 
         yield return ("doctor-entitlements", ReportDocuments.DoctorEntitlements(
         [
-            new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), null,
-                EntitlementSystem.DrugProfit, 840m, EntitlementStatus.Approved, Guid.NewGuid(),
-                Now, null, null, Now, Now),
-            new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), null, Guid.NewGuid(),
-                EntitlementSystem.DirectFee, 200m, EntitlementStatus.Paid, Guid.NewGuid(),
-                Now, Now.AddDays(2), PaymentMethod.Cash, Now, Now),
+            new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                EntitlementSystem.DrugProfit, 840m, Now, Now),
+            new DoctorEntitlementResponse(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(),
+                EntitlementSystem.DirectFee, 200m, Now, Now),
         ]));
 
         yield return ("sales", ReportDocuments.Sales(SampleSales()));
