@@ -37,6 +37,7 @@ public sealed class ReportsModule : IEndpointModule
         group.MapGet("/sales", Sales).WithName("Reports_Sales");
         group.MapGet("/profit-and-loss", ProfitAndLoss).WithName("Reports_ProfitAndLoss");
         group.MapGet("/inventory-movement", InventoryMovement).WithName("Reports_InventoryMovement");
+        group.MapGet("/consumables", Consumables).WithName("Reports_Consumables");
         group.MapGet("/field-doctor-visits", FieldDoctorVisits).WithName("Reports_FieldDoctorVisits");
         group.MapGet("/kpi-summary", KpiSummary).WithName("Reports_KpiSummary");
         group.MapGet("/upcoming-vaccinations", UpcomingVaccinations).WithName("Reports_UpcomingVaccinations");
@@ -195,6 +196,24 @@ public sealed class ReportsModule : IEndpointModule
     {
         var report = await svc.BuildAsync(from, to, productId, locationType, locationId, skip, take, cancellationToken);
         return export.Resolve(format, report, ReportDocuments.InventoryMovement);
+    }
+
+    /// <summary>GET /reports/consumables — internal-use consumption (qty + FEFO cost) per (location, product) over a period (M27).</summary>
+    private static async Task<IResult> Consumables(
+        ConsumablesReportService svc,
+        ReportExporter export,
+        DateOnly? from,
+        DateOnly? to,
+        Guid? productId,
+        string? locationType,
+        Guid? locationId,
+        int? skip,
+        int? take,
+        string? format,
+        CancellationToken cancellationToken)
+    {
+        var report = await svc.BuildAsync(from, to, productId, locationType, locationId, skip, take, cancellationToken);
+        return export.Resolve(format, report, ReportDocuments.Consumables);
     }
 
     /// <summary>GET /reports/field-doctor-visits — field visit log (cursor-paged via ?cursor/?limit), by doctor.</summary>

@@ -268,6 +268,7 @@ builder.Services.AddScoped<VetSystem.API.Reports.ProfitPerBatchReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.SalesReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.ProfitAndLossReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.InventoryMovementReportService>();
+builder.Services.AddScoped<VetSystem.API.Reports.ConsumablesReportService>(); // M27
 builder.Services.AddScoped<VetSystem.API.Reports.FieldDoctorVisitsReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.KpiSummaryReportService>();
 builder.Services.AddScoped<VetSystem.API.Reports.UpcomingVaccinationsReportService>();

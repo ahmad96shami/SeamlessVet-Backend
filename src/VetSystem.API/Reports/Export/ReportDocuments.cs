@@ -230,6 +230,40 @@ public static class ReportDocuments
                     ReportCell.Number(row.Balance))).ToList()),
         ]);
 
+    // ----- M27: consumables ---------------------------------------------------------------------
+    public static ReportDocument Consumables(ConsumablesReportResponse r) => new(
+        Title: ReportLabels.ConsumablesTitle,
+        FileBaseName: "consumables",
+        Filters: Fields(
+            DayField(ReportLabels.From, r.From),
+            DayField(ReportLabels.To, r.To),
+            IdField(ReportLabels.Product, r.ProductId),
+            Opt(ReportLabels.LocationKind, r.LocationType is null ? null : ReportLabels.LocationType(r.LocationType)),
+            IdField(ReportLabels.Location, r.LocationId)),
+        Summary: Fields(
+            new ReportField(ReportLabels.TotalQuantityConsumed, r.TotalQuantity.ToString("#,##0.###", Inv)),
+            MoneyField(ReportLabels.TotalCost, r.TotalCost),
+            IntField(ReportLabels.TotalCount, r.TotalCount)),
+        Tables:
+        [
+            new ReportTable(
+                Caption: null,
+                Columns:
+                [
+                    new ReportColumn(ReportLabels.Product, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.LocationKind, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.Location, ReportCellKind.Text),
+                    new ReportColumn(ReportLabels.QuantityConsumed, ReportCellKind.Number),
+                    new ReportColumn(ReportLabels.Cost, ReportCellKind.Money),
+                ],
+                Rows: r.Rows.Select(row => Row(
+                    ReportCell.Text(row.ProductName),
+                    ReportCell.Text(ReportLabels.LocationType(row.LocationType)),
+                    ReportCell.Id(row.LocationId),
+                    ReportCell.Number(row.Quantity),
+                    ReportCell.Money(row.Cost))).ToList()),
+        ]);
+
     // ----- M12 task 10: field-doctor visits -----------------------------------------------------
     public static ReportDocument FieldDoctorVisits(FieldDoctorVisitsReportResponse r) => new(
         Title: ReportLabels.FieldDoctorVisitsTitle,

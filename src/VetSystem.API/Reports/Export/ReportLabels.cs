@@ -27,6 +27,7 @@ public static class ReportLabels
     public const string PharmacyProfitTitle = "تقرير أرباح الصيدلية";
     public const string InClinicVisitProfitTitle = "تقرير أرباح زيارات العيادة";
     public const string FieldVisitProfitTitle = "تقرير أرباح الزيارات الميدانية";
+    public const string ConsumablesTitle = "تقرير المستهلكات";
 
     // ----- Shared field / column labels ----------------------------------------------------------
     public const string From = "من تاريخ";
@@ -64,6 +65,9 @@ public static class ReportLabels
     public const string Cost = "التكلفة";
     public const string Profit = "الربح";
     public const string QuantitySold = "الكمية المباعة";
+    public const string QuantityConsumed = "الكمية المستهلكة";        // M27
+    public const string TotalQuantityConsumed = "إجمالي الكمية المستهلكة"; // M27
+    public const string TotalCost = "إجمالي التكلفة";                // M27
     public const string ExamFee = "رسوم الكشف";
     public const string DoctorShare = "حصة الطبيب";
     public const string ClinicShare = "حصة العيادة";
@@ -176,6 +180,7 @@ public static class ReportLabels
         [Codes.MovementType.UnloadFromField] = "إرجاع من الميدان",
         [Codes.MovementType.SaleDeduct] = "خصم بيع",
         [Codes.MovementType.ReturnAdd] = "إضافة مرتجع",
+        [Codes.MovementType.Consume] = "استهلاك",
     };
 
     private static readonly IReadOnlyDictionary<string, string> LocationTypes = new Dictionary<string, string>
