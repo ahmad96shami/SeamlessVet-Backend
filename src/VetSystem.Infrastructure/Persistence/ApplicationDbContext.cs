@@ -84,6 +84,12 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<DoctorPartnerLedgerEntry> DoctorPartnerLedgerEntries => Set<DoctorPartnerLedgerEntry>();
     public DbSet<DoctorPartnerPayment> DoctorPartnerPayments => Set<DoctorPartnerPayment>();
 
+    // M31 — employees + their HR salary/loan ledger (the AP-side mirror of the supplier ledger triad).
+    public DbSet<Employee> Employees => Set<Employee>();
+    public DbSet<EmployeeLedger> EmployeeLedgers => Set<EmployeeLedger>();
+    public DbSet<EmployeeLedgerEntry> EmployeeLedgerEntries => Set<EmployeeLedgerEntry>();
+    public DbSet<EmployeePayment> EmployeePayments => Set<EmployeePayment>();
+
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 
