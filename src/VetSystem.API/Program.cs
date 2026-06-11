@@ -522,7 +522,7 @@ if (args.Contains("--seed") || args.Contains("--force-seed"))
 {
     await using var scope = app.Services.CreateAsyncScope();
     var seeder = scope.ServiceProvider.GetRequiredService<DataSeeder>();
-    await seeder.SeedAsync(force: args.Contains("--force-seed"));
+    await seeder.SeedAsync(force: args.Contains("--force-seed"), demo: args.Contains("--demo"));
     return;
 }
 

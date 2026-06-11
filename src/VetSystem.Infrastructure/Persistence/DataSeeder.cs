@@ -39,7 +39,7 @@ public sealed class DataSeeder
         _logger = logger;
     }
 
-    public async Task SeedAsync(bool force = false, CancellationToken cancellationToken = default)
+    public async Task SeedAsync(bool force = false, bool demo = false, CancellationToken cancellationToken = default)
     {
         await _db.Database.MigrateAsync(cancellationToken);
 
@@ -64,9 +64,24 @@ public sealed class DataSeeder
             await SeedSystemSettingsAsync(env.Id, cancellationToken);
             await SeedWarehouseAsync(env.Id, cancellationToken);
             await SeedSystemServicesAsync(env.Id, cancellationToken);
+
+            if (demo)
+            {
+                await SeedDemoCatalogAsync(env.Id, cancellationToken);
+            }
         }
 
         await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
+
+        if (demo)
+        {
+            // Opening stock runs after the admin seed: every inventory_movement needs a valid
+            // performed_by (FK to users), and the bootstrap admin is created above.
+            foreach (var env in environments)
+            {
+                await SeedDemoStockAsync(env.Id, cancellationToken);
+            }
+        }
     }
 
     private async Task SeedBootstrapEnvironmentAsync(CancellationToken cancellationToken)
@@ -260,6 +275,259 @@ public sealed class DataSeeder
             await _db.SaveChangesAsync(cancellationToken);
             _logger.LogInformation(
                 "Seeded system service {Category} for environment {EnvironmentId}", category, environmentId);
+        }
+    }
+
+    /// <summary>
+    /// Demo / showcase catalog — products (medications + general goods), billable services
+    /// (clinic + field), and the vaccine catalog (services with category <c>vaccination</c>).
+    /// Gated behind <c>--demo</c> so production first-run stays empty; idempotent (matches on
+    /// Arabic name) so re-running <c>--seed --demo</c> never duplicates rows.
+    /// </summary>
+    private async Task SeedDemoCatalogAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        await SeedDemoProductsAsync(environmentId, cancellationToken);
+        await SeedDemoServicesAsync(environmentId, cancellationToken);
+    }
+
+    private async Task SeedDemoProductsAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        var existing = await _db.Products
+            .IgnoreQueryFilters()
+            .Where(p => p.EnvironmentId == environmentId)
+            .Select(p => p.NameAr)
+            .ToHashSetAsync(cancellationToken);
+
+        // (NameAr, NameLatin, Category, Manufacturer, UnitOfMeasure, Purchase, Selling, Reorder)
+        var seeds = new (string NameAr, string NameLatin, string Category, string? Manufacturer, string Unit, decimal Purchase, decimal Selling, decimal Reorder)[]
+        {
+            // — Medications —
+            ("أموكسيسيلين 15% حقن", "Amoxicillin 15% LA", ProductCategory.Medication, "Interchemie", "قارورة 100 مل", 18m, 30m, 10m),
+            ("أوكسي تتراسيكلين 20% طويل المفعول", "Oxytetracycline 20% LA", ProductCategory.Medication, "Vetoquinol", "قارورة 100 مل", 22m, 38m, 10m),
+            ("إنروفلوكساسين 10% حقن", "Enrofloxacin 10%", ProductCategory.Medication, "Bayer", "قارورة 100 مل", 25m, 42m, 8m),
+            ("بنسلين - ستربتومايسين", "Penicillin–Streptomycin", ProductCategory.Medication, "Norbrook", "قارورة 100 مل", 20m, 34m, 10m),
+            ("ميلوكسيكام 2% حقن", "Meloxicam 2%", ProductCategory.Medication, "Boehringer Ingelheim", "قارورة 50 مل", 30m, 50m, 6m),
+            ("ديكساميثازون حقن", "Dexamethasone", ProductCategory.Medication, "MSD", "قارورة 50 مل", 12m, 22m, 8m),
+            ("آيفرمكتين 1% حقن", "Ivermectin 1%", ProductCategory.Medication, "Merial", "قارورة 50 مل", 15m, 28m, 10m),
+            ("ألبيندازول 10% شراب", "Albendazole 10% Oral", ProductCategory.Medication, "Vapco", "عبوة 1 لتر", 16m, 28m, 6m),
+            ("فيتامين AD3E حقن", "Vitamin AD3E", ProductCategory.Medication, "Interchemie", "قارورة 100 مل", 14m, 25m, 8m),
+            ("محلول وريدي (نورمال سلاين)", "Normal Saline IV", ProductCategory.Medication, "Hikma", "كيس 1 لتر", 5m, 10m, 20m),
+            ("أوكسيتوسين حقن", "Oxytocin", ProductCategory.Medication, "Vapco", "قارورة 50 مل", 8m, 16m, 6m),
+            ("مرهم العين (أوكسي تتراسيكلين)", "Eye Ointment", ProductCategory.Medication, "Jamjoom Pharma", "أنبوب 5 غم", 4m, 9m, 12m),
+            // — General products —
+            ("علف قطط جاف", "Dry Cat Food", ProductCategory.Product, "Royal Canin", "كيس 2 كغ", 35m, 55m, 5m),
+            ("علف كلاب جاف", "Dry Dog Food", ProductCategory.Product, "Pedigree", "كيس 3 كغ", 40m, 62m, 5m),
+            ("شامبو طبي للحيوانات", "Medicated Pet Shampoo", ProductCategory.Product, "Beaphar", "عبوة 250 مل", 12m, 22m, 8m),
+            ("طوق مضاد للبراغيث والقراد", "Flea & Tick Collar", ProductCategory.Product, "Bayer", "قطعة", 18m, 32m, 10m),
+            ("قفص نقل بلاستيكي", "Plastic Pet Carrier", ProductCategory.Product, null, "قطعة", 45m, 75m, 3m),
+            ("رباط شاش طبي", "Medical Gauze Roll", ProductCategory.Product, null, "قطعة", 2m, 5m, 30m),
+            ("حقنة (سرنجة) 5 مل", "Syringe 5 ml", ProductCategory.Product, null, "قطعة", 0.3m, 1m, 100m),
+            ("قفازات فحص (علبة)", "Exam Gloves Box", ProductCategory.Product, null, "علبة 100", 8m, 15m, 10m),
+        };
+
+        var added = 0;
+        foreach (var s in seeds)
+        {
+            if (existing.Contains(s.NameAr))
+            {
+                continue;
+            }
+
+            _db.Products.Add(new Product
+            {
+                EnvironmentId = environmentId,
+                NameAr = s.NameAr,
+                NameLatin = s.NameLatin,
+                Category = s.Category,
+                Manufacturer = s.Manufacturer,
+                UnitOfMeasure = s.Unit,
+                PurchasePrice = s.Purchase,
+                SellingPrice = s.Selling,
+                ReorderPoint = s.Reorder,
+            });
+            added++;
+        }
+
+        if (added > 0)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Seeded {Count} demo products for environment {EnvironmentId}", added, environmentId);
+        }
+    }
+
+    private async Task SeedDemoServicesAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        var existing = await _db.Services
+            .IgnoreQueryFilters()
+            .Where(s => s.EnvironmentId == environmentId)
+            .Select(s => s.NameAr)
+            .ToHashSetAsync(cancellationToken);
+
+        // (NameAr, NameLatin, Category, DefaultPrice). Category is a free-text display label except
+        // for ServiceCategories.Vaccination, which the M22 vaccine catalog + POS tab filter on.
+        var seeds = new (string NameAr, string NameLatin, string Category, decimal Price)[]
+        {
+            // — Clinic services —
+            ("تعقيم / خصي قطة", "Cat Spay / Neuter", "جراحة", 120m),
+            ("تعقيم / خصي كلب", "Dog Spay / Neuter", "جراحة", 180m),
+            ("خياطة جرح", "Wound Suturing", "جراحة", 60m),
+            ("تنظيف أسنان (تقليح)", "Dental Scaling", "عيادة", 80m),
+            ("قص أظافر", "Nail Trimming", "عيادة", 15m),
+            ("تصوير بالأشعة السينية", "X-Ray Imaging", "تشخيص", 70m),
+            ("فحص بالموجات فوق الصوتية", "Ultrasound", "تشخيص", 90m),
+            ("تحليل دم شامل (CBC)", "Complete Blood Count", "مختبر", 50m),
+            ("تحليل براز", "Fecal Examination", "مختبر", 25m),
+            // — Field services —
+            ("زيارة مزرعة ميدانية", "Farm Field Visit", "خدمة ميدانية", 100m),
+            ("فحص صحة القطيع", "Herd Health Check", "خدمة ميدانية", 150m),
+            ("توليد متعسر", "Assisted Delivery", "خدمة ميدانية", 200m),
+            // — Vaccines (companion animals) —
+            ("لقاح السعار (داء الكلب)", "Rabies Vaccine", ServiceCategories.Vaccination, 40m),
+            ("اللقاح الثماني للكلاب (DHPPi+L)", "Dog 8-in-1 (DHPPi+L)", ServiceCategories.Vaccination, 60m),
+            ("اللقاح الرباعي للقطط (FVRCP)", "Feline FVRCP", ServiceCategories.Vaccination, 55m),
+            ("لقاح السعار للقطط", "Feline Rabies", ServiceCategories.Vaccination, 40m),
+            // — Vaccines (livestock) —
+            ("لقاح الحمى القلاعية", "Foot-and-Mouth Disease", ServiceCategories.Vaccination, 25m),
+            ("لقاح البروسيلا (Rev-1)", "Brucellosis Rev-1", ServiceCategories.Vaccination, 20m),
+            ("لقاح جدري الأغنام", "Sheep Pox", ServiceCategories.Vaccination, 18m),
+            ("لقاح الكلوستريديا (المعوية)", "Clostridial / Enterotoxaemia", ServiceCategories.Vaccination, 22m),
+            ("لقاح طاعون المجترات الصغيرة", "Peste des Petits Ruminants", ServiceCategories.Vaccination, 20m),
+            ("لقاح اللسان الأزرق", "Bluetongue", ServiceCategories.Vaccination, 24m),
+        };
+
+        var added = 0;
+        foreach (var s in seeds)
+        {
+            if (existing.Contains(s.NameAr))
+            {
+                continue;
+            }
+
+            _db.Services.Add(new Service
+            {
+                EnvironmentId = environmentId,
+                NameAr = s.NameAr,
+                NameLatin = s.NameLatin,
+                Category = s.Category,
+                DefaultPrice = s.Price,
+            });
+            added++;
+        }
+
+        if (added > 0)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Seeded {Count} demo services (incl. vaccines) for environment {EnvironmentId}", added, environmentId);
+        }
+    }
+
+    /// <summary>
+    /// Opening warehouse stock for the demo catalog so products are sellable in the POS. Writes the
+    /// canonical pair per product — a <c>receive</c> <see cref="InventoryMovement"/> plus the
+    /// materialized <see cref="StockItem"/> balance — keeping the invariant
+    /// <c>stock_items.quantity == Σ quantity_delta</c> (trivially true for a single receive).
+    /// Idempotent: skips any product already stocked at the central warehouse.
+    /// </summary>
+    private async Task SeedDemoStockAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        var warehouseId = await _db.Warehouses
+            .IgnoreQueryFilters()
+            .Where(w => w.EnvironmentId == environmentId && w.DeletedAt == null)
+            .Select(w => (Guid?)w.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (warehouseId is null)
+        {
+            return; // no warehouse to receive into (should not happen — seeded above)
+        }
+
+        // performed_by is a required FK to users; attribute the opening stock to the admin.
+        var performedBy = await _db.Users
+            .IgnoreQueryFilters()
+            .Where(u => u.EnvironmentId == environmentId && u.DeletedAt == null)
+            .Select(u => (Guid?)u.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (performedBy is null)
+        {
+            return; // no user to attribute the movement to
+        }
+
+        var products = await _db.Products
+            .IgnoreQueryFilters()
+            .Where(p => p.EnvironmentId == environmentId && p.DeletedAt == null)
+            .Select(p => new { p.Id, p.ReorderPoint, p.PurchasePrice, p.ExpirationDate })
+            .ToListAsync(cancellationToken);
+
+        var alreadyStocked = await _db.StockItems
+            .IgnoreQueryFilters()
+            .Where(s => s.EnvironmentId == environmentId
+                && s.LocationType == StockLocation.Warehouse
+                && s.LocationId == warehouseId.Value)
+            .Select(s => s.ProductId)
+            .ToHashSetAsync(cancellationToken);
+
+        var added = 0;
+        foreach (var p in products)
+        {
+            if (alreadyStocked.Contains(p.Id))
+            {
+                continue;
+            }
+
+            // Comfortably above the reorder point so nothing reads as low-stock in the demo.
+            var quantity = Math.Max(25m, decimal.Round(p.ReorderPoint * 5m, 3));
+
+            // M25 — opening stock is one FEFO lot at the catalog purchase cost (canonical trio:
+            // lot + receive movement + materialized balance), keeping Σ remaining_qty == quantity.
+            var lotId = Guid.CreateVersion7();
+            _db.InventoryLots.Add(new InventoryLot
+            {
+                Id = lotId,
+                EnvironmentId = environmentId,
+                ProductId = p.Id,
+                LocationType = StockLocation.Warehouse,
+                LocationId = warehouseId.Value,
+                UnitCost = p.PurchasePrice,
+                ExpirationDate = p.ExpirationDate,
+                ReceivedQty = quantity,
+                RemainingQty = quantity,
+                ReceivedAt = _clock.UtcNow,
+            });
+
+            _db.InventoryMovements.Add(new InventoryMovement
+            {
+                EnvironmentId = environmentId,
+                ProductId = p.Id,
+                MovementType = MovementType.Receive,
+                ToLocationType = StockLocation.Warehouse,
+                ToLocationId = warehouseId.Value,
+                QuantityDelta = quantity,
+                Reason = "رصيد افتتاحي (بيانات تجريبية)",
+                LotId = lotId,
+                PerformedBy = performedBy.Value,
+                IdempotencyKey = $"seed-stock-{p.Id:N}",
+            });
+
+            _db.StockItems.Add(new StockItem
+            {
+                EnvironmentId = environmentId,
+                LocationType = StockLocation.Warehouse,
+                LocationId = warehouseId.Value,
+                ProductId = p.Id,
+                Quantity = quantity,
+            });
+            added++;
+        }
+
+        if (added > 0)
+        {
+            await _db.SaveChangesAsync(cancellationToken);
+            _logger.LogInformation(
+                "Seeded opening warehouse stock for {Count} demo products in environment {EnvironmentId}",
+                added, environmentId);
         }
     }
 
