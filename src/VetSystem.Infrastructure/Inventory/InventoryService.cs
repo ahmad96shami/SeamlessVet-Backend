@@ -18,6 +18,16 @@ namespace VetSystem.Infrastructure.Inventory;
 /// <c>(environment_id, idempotency_key)</c> index converts retried offline writes into idempotent
 /// replays. A leg that would push a balance below zero publishes
 /// <see cref="NegativeStockAttemptedEvent"/> and then rejects the whole write.
+///
+/// <para><b>M25 FEFO lots.</b> Each stock-arriving leg (<c>receive</c> / positive <c>adjust</c> /
+/// <c>return_add</c>) creates an <see cref="InventoryLot"/> carrying its cost + expiry; each
+/// stock-leaving leg (<c>sale_deduct</c> / negative <c>adjust</c>) FEFO-consumes earliest-expiry
+/// lots and decrements their <c>remaining_qty</c> in the same transaction. A transfer
+/// (<c>load_to_field</c> / <c>unload_from_field</c>) FEFO-consumes the source and <b>mirrors each
+/// consumed sub-lot's cost + expiry at the destination</b>, so field stock keeps its FEFO basis.
+/// Per (location, product) <c>Σ remaining_qty == stock_items.quantity</c> holds by construction.
+/// <see cref="MovementResult.ResolvedUnitCost"/> hands the FEFO weighted-average cost back for the
+/// caller to snapshot as COGS.</para>
 /// </summary>
 public sealed class InventoryService : IInventoryService
 {
@@ -27,17 +37,23 @@ public sealed class InventoryService : IInventoryService
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IMovementTranslator _translator;
     private readonly IDomainEventPublisher _events;
+    private readonly IClock _clock;
+    private readonly IGuidV7Generator _ids;
 
     public InventoryService(
         ApplicationDbContext db,
         ICurrentUserAccessor currentUser,
         IMovementTranslator translator,
-        IDomainEventPublisher events)
+        IDomainEventPublisher events,
+        IClock clock,
+        IGuidV7Generator ids)
     {
         _db = db;
         _currentUser = currentUser;
         _translator = translator;
         _events = events;
+        _clock = clock;
+        _ids = ids;
     }
 
     public async Task<MovementResult> ApplyMovementAsync(MovementIntent intent, CancellationToken cancellationToken)
@@ -64,10 +80,18 @@ public sealed class InventoryService : IInventoryService
 
         var legs = _translator.Translate(intent);
 
-        await EnsureProductExistsAsync(intent.ProductId, cancellationToken);
+        var product = await _db.Products
+            .Select(p => new { p.Id, p.PurchasePrice, p.ExpirationDate })
+            .FirstOrDefaultAsync(p => p.Id == intent.ProductId, cancellationToken)
+            ?? throw new NotFoundException("product", intent.ProductId);
+
+        // The cost basis for a created lot (receive / return / adjust-up) and for any FEFO shortfall.
+        var fallbackUnitCost = intent.UnitCost ?? product.PurchasePrice;
 
         var movements = new List<InventoryMovement>(legs.Count);
         var balances = new List<StockBalance>(legs.Count);
+        var resolvedUnitCost = fallbackUnitCost;
+        FefoConsumptionPlan? transferSourcePlan = null; // leg-0 source consume → leg-1 destination mirror
 
         for (var i = 0; i < legs.Count; i++)
         {
@@ -116,6 +140,40 @@ public sealed class InventoryService : IInventoryService
                 stock.Quantity = updated;
             }
 
+            // --- M25 lot handling: arriving stock creates lots; leaving stock FEFO-consumes them. ---
+            Guid? movementLotId = null;
+
+            if (leg.SignedDelta < 0m)
+            {
+                var plan = await ConsumeFefoAsync(
+                    envId, intent.ProductId, locationType, locationId,
+                    -leg.SignedDelta, fallbackUnitCost, cancellationToken);
+                movementLotId = plan.SingleLotId;
+                resolvedUnitCost = plan.WeightedAverageUnitCost;
+
+                // A transfer's leg-0 source consume drives the leg-1 destination lot mirroring.
+                if (legs.Count == 2 && i == 0)
+                {
+                    transferSourcePlan = plan;
+                }
+            }
+            else if (transferSourcePlan is { } sourcePlan)
+            {
+                // Transfer destination leg — recreate the consumed source sub-lots' cost + expiry so
+                // field stock keeps its FEFO basis (one lot per source draw, plus any fallback remainder).
+                movementLotId = MirrorTransferLots(envId, intent, locationType, locationId, sourcePlan);
+            }
+            else
+            {
+                // Standalone arrival (receive / return_add / positive adjust): one new lot.
+                var lot = CreateLot(
+                    envId, intent.ProductId, locationType, locationId,
+                    fallbackUnitCost, intent.ExpirationDate, intent.LotNumber,
+                    leg.SignedDelta, intent.PurchaseInvoiceItemId);
+                movementLotId = lot.Id;
+                resolvedUnitCost = lot.UnitCost;
+            }
+
             var movement = new InventoryMovement
             {
                 Id = i == 0 ? intent.Id ?? Guid.Empty : Guid.Empty,
@@ -131,6 +189,7 @@ public sealed class InventoryService : IInventoryService
                 VisitId = intent.VisitId,
                 InvoiceId = intent.InvoiceId,
                 PurchaseInvoiceId = intent.PurchaseInvoiceId,
+                LotId = movementLotId,
                 PerformedBy = userId,
                 IdempotencyKey = i == 0 ? intent.IdempotencyKey : $"{intent.IdempotencyKey}{SecondLegSuffix}",
             };
@@ -154,7 +213,89 @@ public sealed class InventoryService : IInventoryService
             MovementId: movements[0].Id,
             MovementIds: movements.Select(m => m.Id).ToList(),
             Balances: balances,
-            Replayed: false);
+            Replayed: false,
+            ResolvedUnitCost: resolvedUnitCost);
+    }
+
+    /// <summary>
+    /// FEFO-consumes <paramref name="quantity"/> from the location's on-hand lots, decrementing each
+    /// drawn lot's <c>remaining_qty</c> on the tracked entity (persisted by the caller's SaveChanges).
+    /// Returns the plan (draws + weighted-average cost) for COGS and transfer mirroring.
+    /// </summary>
+    private async Task<FefoConsumptionPlan> ConsumeFefoAsync(
+        Guid envId, Guid productId, string locationType, Guid locationId,
+        decimal quantity, decimal fallbackUnitCost, CancellationToken cancellationToken)
+    {
+        var lots = await _db.InventoryLots
+            .Where(l => l.ProductId == productId
+                        && l.LocationType == locationType
+                        && l.LocationId == locationId
+                        && l.RemainingQty > 0m)
+            .ToListAsync(cancellationToken);
+
+        var plan = FefoPlanner.Plan(
+            lots.Select(l => new FefoLotView(l.Id, l.RemainingQty, l.UnitCost, l.ExpirationDate, l.ReceivedAt)).ToList(),
+            quantity,
+            fallbackUnitCost);
+
+        if (plan.Draws.Count > 0)
+        {
+            var byId = lots.ToDictionary(l => l.Id);
+            foreach (var draw in plan.Draws)
+            {
+                byId[draw.LotId].RemainingQty -= draw.Quantity;
+            }
+        }
+
+        return plan;
+    }
+
+    /// <summary>Recreates a transfer's consumed source sub-lots at the destination (one lot per draw,
+    /// plus a fallback-cost lot for any uncovered remainder). Returns the single created lot id when
+    /// exactly one lot resulted, else null.</summary>
+    private Guid? MirrorTransferLots(
+        Guid envId, MovementIntent intent, string locationType, Guid locationId, FefoConsumptionPlan sourcePlan)
+    {
+        var created = new List<InventoryLot>(sourcePlan.Draws.Count + 1);
+
+        foreach (var draw in sourcePlan.Draws)
+        {
+            created.Add(CreateLot(
+                envId, intent.ProductId, locationType, locationId,
+                draw.UnitCost, draw.ExpirationDate, intent.LotNumber, draw.Quantity, purchaseInvoiceItemId: null));
+        }
+
+        if (sourcePlan.Shortfall > 0m)
+        {
+            created.Add(CreateLot(
+                envId, intent.ProductId, locationType, locationId,
+                sourcePlan.FallbackUnitCost, expirationDate: null, intent.LotNumber, sourcePlan.Shortfall, purchaseInvoiceItemId: null));
+        }
+
+        return created.Count == 1 ? created[0].Id : null;
+    }
+
+    private InventoryLot CreateLot(
+        Guid envId, Guid productId, string locationType, Guid locationId,
+        decimal unitCost, DateOnly? expirationDate, string? lotNumber, decimal quantity, Guid? purchaseInvoiceItemId)
+    {
+        var lot = new InventoryLot
+        {
+            Id = _ids.New(),
+            EnvironmentId = envId,
+            ProductId = productId,
+            LocationType = locationType,
+            LocationId = locationId,
+            PurchaseInvoiceItemId = purchaseInvoiceItemId,
+            UnitCost = unitCost,
+            ExpirationDate = expirationDate,
+            LotNumber = lotNumber,
+            ReceivedQty = quantity,
+            RemainingQty = quantity,
+            ReceivedAt = _clock.UtcNow,
+        };
+        _db.InventoryLots.Add(lot);
+        return lot;
     }
 
     private async Task<MovementResult> BuildReplayResultAsync(Guid envId, string baseKey, CancellationToken cancellationToken)
@@ -183,20 +324,13 @@ public sealed class InventoryService : IInventoryService
             balances.Add(new StockBalance(locationType, locationId, row.ProductId, stock?.Quantity ?? 0m));
         }
 
+        // A replay does not recompute COGS — the original issuance already snapshotted it.
         return new MovementResult(
             MovementId: primary.Id,
             MovementIds: ordered.Select(m => m.Id).ToList(),
             Balances: balances,
-            Replayed: true);
-    }
-
-    private async Task EnsureProductExistsAsync(Guid productId, CancellationToken cancellationToken)
-    {
-        var exists = await _db.Products.AnyAsync(p => p.Id == productId, cancellationToken);
-        if (!exists)
-        {
-            throw new NotFoundException("product", productId);
-        }
+            Replayed: true,
+            ResolvedUnitCost: 0m);
     }
 
     private async Task EnsureLocationExistsAsync(string locationType, Guid locationId, CancellationToken cancellationToken)

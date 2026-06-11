@@ -83,7 +83,12 @@ public sealed class InventoryMovementsSyncHandler : ISyncTableHandler
             IdempotencyKey: SyncBody.RequireString(body, "idempotency_key"),
             Reason: SyncBody.OptionalString(body, "reason"),
             VisitId: SyncBody.OptionalGuid(body, "visit_id"),
-            InvoiceId: SyncBody.OptionalGuid(body, "invoice_id"));
+            InvoiceId: SyncBody.OptionalGuid(body, "invoice_id"),
+            // M25 — cost + expiry ride along on a stock-arriving movement (receive / return_add /
+            // positive adjust) so the device can seed a lot's FEFO basis; ignored by deductions/transfers.
+            UnitCost: SyncBody.OptionalDecimal(body, "unit_cost"),
+            ExpirationDate: SyncBody.OptionalDate(body, "expiration_date"),
+            LotNumber: SyncBody.OptionalString(body, "lot_number"));
 
         var result = await _inventory.ApplyMovementAsync(intent, cancellationToken);
         return new SyncWriteResult(result.MovementId, DateTimeOffset.UtcNow);

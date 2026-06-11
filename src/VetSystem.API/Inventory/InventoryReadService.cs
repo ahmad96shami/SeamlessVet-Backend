@@ -157,6 +157,7 @@ public sealed class InventoryReadService
                 m.Reason,
                 m.VisitId,
                 m.InvoiceId,
+                m.LotId,
                 m.PerformedBy,
                 m.CreatedAt))
             .ToListAsync(cancellationToken);
