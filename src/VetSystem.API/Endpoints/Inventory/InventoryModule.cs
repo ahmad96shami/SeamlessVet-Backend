@@ -59,6 +59,13 @@ public sealed class InventoryModule : IEndpointModule
             .AddEndpointFilter(new IdempotencyKeyFilter("inventory_unload_field"))
             .WithName("Inventory_UnloadField")
             .WithSummary("Return stock from a field inventory to the central warehouse.");
+
+        group.MapPost("/consume", Consume)
+            .RequirePermission(PermissionKey.InventoryAdjust)
+            .AddEndpointFilter<ValidationFilter<ConsumeStockRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("inventory_consume"))
+            .WithName("Inventory_Consume")
+            .WithSummary("Record internal-use consumption of a consumable (FEFO-deducts lots).");
     }
 
     private static async Task<IResult> ListStock(
@@ -135,6 +142,15 @@ public sealed class InventoryModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var result = await svc.UnloadFieldAsync(request, cancellationToken);
+        return TypedResults.Ok(new IdentifierResponse(result.MovementId));
+    }
+
+    private static async Task<IResult> Consume(
+        ConsumeStockRequest request,
+        InventoryAdminService svc,
+        CancellationToken cancellationToken)
+    {
+        var result = await svc.ConsumeAsync(request, cancellationToken);
         return TypedResults.Ok(new IdentifierResponse(result.MovementId));
     }
 }

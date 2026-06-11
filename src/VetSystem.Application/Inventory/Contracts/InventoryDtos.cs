@@ -168,6 +168,23 @@ public sealed record UnloadFieldRequest(
     string IdempotencyKey,
     string? Reason = null);
 
+/// <summary>
+/// M27 — record internal-use consumption of a consumable (gloves, syringes, …): a positive
+/// <see cref="Quantity"/> magnitude FEFO-deducted from a location as a <c>consume</c> movement, with a
+/// mandatory internal-use <see cref="Reason"/>. <see cref="LocationType"/> + <see cref="LocationId"/>
+/// are optional — omit both to consume from the environment's central warehouse (the common clinic
+/// case), or supply both (e.g. a field inventory). The product must be flagged
+/// <c>is_consumable</c> (else <c>product_not_consumable</c>); the negative-stock guard still applies.
+/// </summary>
+public sealed record ConsumeStockRequest(
+    Guid? Id,
+    Guid ProductId,
+    decimal Quantity,
+    string Reason,
+    string IdempotencyKey,
+    string? LocationType = null,
+    Guid? LocationId = null);
+
 // ---- Scan results (data only; M11 turns these into alerts via Hangfire) ----
 
 /// <summary>

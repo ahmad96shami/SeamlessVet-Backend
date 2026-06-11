@@ -55,3 +55,26 @@ public sealed class UnloadFieldRequestValidator : AbstractValidator<UnloadFieldR
         RuleFor(r => r.Reason).MaximumLength(512);
     }
 }
+
+public sealed class ConsumeStockRequestValidator : AbstractValidator<ConsumeStockRequest>
+{
+    public ConsumeStockRequestValidator()
+    {
+        RuleFor(r => r.ProductId).NotEmpty();
+        RuleFor(r => r.Quantity).GreaterThan(0m).WithMessage("Quantity must be greater than zero.");
+        RuleFor(r => r.Reason).NotEmpty().WithMessage("Consumption requires a reason.").MaximumLength(512);
+        RuleFor(r => r.IdempotencyKey).NotEmpty().MaximumLength(128);
+
+        // Location is optional (omit both ⇒ central warehouse), but both parts must come together.
+        RuleFor(r => r.LocationType!)
+            .Must(t => StockLocation.All.Contains(t))
+            .WithMessage($"LocationType must be one of: {string.Join(", ", StockLocation.All)}.")
+            .When(r => r.LocationType is not null);
+        RuleFor(r => r.LocationId)
+            .NotEmpty().WithMessage("LocationId is required when LocationType is set.")
+            .When(r => r.LocationType is not null);
+        RuleFor(r => r.LocationType)
+            .NotEmpty().WithMessage("LocationType is required when LocationId is set.")
+            .When(r => r.LocationId is not null);
+    }
+}
