@@ -97,13 +97,15 @@ streams:
       - SELECT * FROM invoice_items    WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
       - SELECT * FROM payments         WHERE visit_id IN (SELECT visit_id FROM my_visits) AND deleted_at IS NULL
 
-  # --- The doctor's field inventory ("moving warehouse"): balances + movements. -----------
-  # stock_items / inventory_movements join the inventory by `location_id`; warehouse stock
-  # stays server-only.
+  # --- The doctor's field inventory ("moving warehouse"): balances + lots + movements. -----
+  # stock_items / inventory_lots / inventory_movements join the inventory by `location_id`;
+  # warehouse stock (and its lots) stays server-only. M25 — the FEFO lots that back the field
+  # balance sync too, so the device can show cost/expiry and reconcile Σ remaining_qty.
   by_field_inventory:
     auto_subscribe: true
     queries:
       - SELECT * FROM stock_items          WHERE location_id      IN (SELECT field_inventory_id FROM my_field_inventories) AND location_type      = 'field' AND deleted_at IS NULL
+      - SELECT * FROM inventory_lots        WHERE location_id      IN (SELECT field_inventory_id FROM my_field_inventories) AND location_type      = 'field' AND deleted_at IS NULL
       - SELECT * FROM inventory_movements  WHERE from_location_id IN (SELECT field_inventory_id FROM my_field_inventories) AND from_location_type = 'field' AND deleted_at IS NULL
       - SELECT * FROM inventory_movements  WHERE to_location_id   IN (SELECT field_inventory_id FROM my_field_inventories) AND to_location_type   = 'field' AND deleted_at IS NULL
 
