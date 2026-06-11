@@ -72,15 +72,18 @@ public sealed class ExpirationWarningsJob
                     targets,
                     NotificationType.ExpiryWarning,
                     Title: "تنبيه قرب انتهاء الصلاحية",
-                    Body: $"يوجد {items.Count} منتج تقترب صلاحيته من الانتهاء.",
+                    Body: $"يوجد {items.Count} دفعة (Lot) تقترب صلاحيتها من الانتهاء.",
                     Payload: new
                     {
                         Items = items.Select(i => new
                         {
+                            i.LotId,
                             i.ProductId,
                             i.ProductNameAr,
+                            i.LotNumber,
                             i.ExpirationDate,
                             i.DaysUntilExpiry,
+                            i.NearExpiryQuantity,
                             i.QuantityOnHand,
                         }).ToList(),
                     }),

@@ -69,16 +69,31 @@ public sealed class InventoryScanService : IInventoryScanService
         var today = DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime);
         var cutoff = today.AddDays(warningDays);
 
-        var products = await _db.Products
+        // M25 — expiry is a lot concern: scan on-hand lots (remaining_qty > 0) whose own expiry is
+        // within the window, one alert row per lot.
+        var lots = await _db.InventoryLots
             .IgnoreQueryFilters()
-            .Where(p => p.EnvironmentId == environmentId
-                        && p.DeletedAt == null
-                        && p.ExpirationDate != null
-                        && p.ExpirationDate <= cutoff)
-            .Select(p => new { p.Id, p.NameAr, ExpirationDate = p.ExpirationDate!.Value })
+            .Where(l => l.EnvironmentId == environmentId
+                        && l.DeletedAt == null
+                        && l.RemainingQty > 0m
+                        && l.ExpirationDate != null
+                        && l.ExpirationDate <= cutoff)
+            .Join(
+                _db.Products.IgnoreQueryFilters().Where(p => p.DeletedAt == null),
+                l => l.ProductId,
+                p => p.Id,
+                (l, p) => new
+                {
+                    l.Id,
+                    l.ProductId,
+                    p.NameAr,
+                    l.LotNumber,
+                    ExpirationDate = l.ExpirationDate!.Value,
+                    l.RemainingQty,
+                })
             .ToListAsync(cancellationToken);
 
-        if (products.Count == 0)
+        if (lots.Count == 0)
         {
             return [];
         }
@@ -90,15 +105,18 @@ public sealed class InventoryScanService : IInventoryScanService
             .Select(g => new { ProductId = g.Key, Quantity = g.Sum(x => x.Quantity) })
             .ToDictionaryAsync(x => x.ProductId, x => x.Quantity, cancellationToken);
 
-        return products
-            .Select(p => new ExpiringProduct(
-                p.Id,
-                p.NameAr,
-                p.ExpirationDate,
-                p.ExpirationDate.DayNumber - today.DayNumber,
-                onHand.GetValueOrDefault(p.Id)))
-            .Where(e => e.QuantityOnHand > 0m)
+        return lots
+            .Select(l => new ExpiringProduct(
+                l.Id,
+                l.ProductId,
+                l.NameAr,
+                l.LotNumber,
+                l.ExpirationDate,
+                l.ExpirationDate.DayNumber - today.DayNumber,
+                l.RemainingQty,
+                onHand.GetValueOrDefault(l.ProductId)))
             .OrderBy(e => e.DaysUntilExpiry)
+            .ThenBy(e => e.ProductNameAr)
             .ToList();
     }
 }
