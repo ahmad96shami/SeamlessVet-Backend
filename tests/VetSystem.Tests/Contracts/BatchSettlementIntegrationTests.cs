@@ -423,7 +423,21 @@ public sealed class BatchSettlementIntegrationTests
             entitlementSystem,
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
+        // M30 — settling releases the entitlement to the doctor's partner ledger, so the responsible
+        // doctor must be a registered doctor-partner (idempotent: one per user, tolerate the conflict).
+        await EnsureDoctorPartnerAsync(client, doctorId);
+
         return (customerId, farmId, batchId);
+    }
+
+    private static async Task EnsureDoctorPartnerAsync(HttpClient client, Guid userId)
+    {
+        var resp = await PostAsync(client, "/doctor-partners", new { id = Guid.CreateVersion7(), userId });
+        if (resp.StatusCode != HttpStatusCode.OK)
+        {
+            (await resp.Content.ReadAsStringAsync()).Should().Contain("doctor_partner_user_taken",
+                "the only acceptable non-OK is the one-partner-per-user guard (already created)");
+        }
     }
 
     private static async Task<Guid> IssueFieldInvoiceAsync(

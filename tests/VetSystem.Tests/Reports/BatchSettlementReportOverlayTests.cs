@@ -168,6 +168,10 @@ public sealed class BatchSettlementReportOverlayTests
             entitlementSystem = "drug_profit",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
+        // M30 — settling credits the doctor's partner ledger, so the responsible doctor must exist as one.
+        (await PostAsync(client, "/doctor-partners", new { id = Guid.CreateVersion7(), userId = doctorId }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
         return (customerId, farmId, batchId);
     }
 

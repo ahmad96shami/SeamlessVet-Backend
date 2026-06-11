@@ -2,11 +2,14 @@ using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
 using VetSystem.Application.Contracts;
 using VetSystem.Application.Contracts.Contracts;
+using VetSystem.Application.DoctorPartnerLedgers;
+using VetSystem.Application.DoctorPartnerLedgers.Contracts;
 using VetSystem.Application.Entitlements;
 using VetSystem.Application.Ledgers;
 using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Domain.Events;
 using VetSystem.Infrastructure.Financial;
 using VetSystem.Infrastructure.Persistence;
 
@@ -36,6 +39,8 @@ public sealed class BatchSettlementService
     private readonly IPricingService _pricing;
     private readonly IEntitlementService _entitlements;
     private readonly IExamFeeCalculatorFactory _examFees;
+    private readonly IDoctorPartnerLedgerService _doctorPartnerLedgers;
+    private readonly IDomainEventPublisher _events;
 
     public BatchSettlementService(
         ApplicationDbContext db,
@@ -45,7 +50,9 @@ public sealed class BatchSettlementService
         IOwnerLedgerResolver ownerLedgers,
         IPricingService pricing,
         IEntitlementService entitlements,
-        IExamFeeCalculatorFactory examFees)
+        IExamFeeCalculatorFactory examFees,
+        IDoctorPartnerLedgerService doctorPartnerLedgers,
+        IDomainEventPublisher events)
     {
         _db = db;
         _currentUser = currentUser;
@@ -55,6 +62,8 @@ public sealed class BatchSettlementService
         _pricing = pricing;
         _entitlements = entitlements;
         _examFees = examFees;
+        _doctorPartnerLedgers = doctorPartnerLedgers;
+        _events = events;
     }
 
     public async Task<BatchSettlementPreviewResponse> PreviewAsync(Guid batchId, CancellationToken cancellationToken)
@@ -319,15 +328,77 @@ public sealed class BatchSettlementService
                 cancellationToken);
         }
 
-        // Close the cycle and compute the doctor's pending entitlement on the settled numbers,
-        // atomically with the settlement itself (mirrors BatchesService.UpdateAsync's close path).
+        // Close the cycle and compute the doctor's entitlement on the settled numbers, atomically with
+        // the settlement. M30 — releasing it credits the responsible doctor's partner ledger (the live
+        // payable); the entitlement row is the immutable accrual audit.
         batch.Status = BatchStatus.Closed;
         await _db.SaveChangesAsync(cancellationToken);
-        await _entitlements.ComputeForBatchAsync(batchId, cancellationToken);
+        var entitlement = await _entitlements.ComputeForBatchAsync(batchId, cancellationToken);
+        var creditedAmount = await ReleaseEntitlementAsync(batch, entitlement, cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
 
+        // Notify the doctor after the commit so the handler observes the persisted credit (M11 task 13).
+        if (creditedAmount > 0m)
+        {
+            await _events.PublishAsync(
+                new EntitlementCreditedEvent(
+                    envId, entitlement.Id, batch.ResponsibleDoctorId, batchId, creditedAmount),
+                cancellationToken);
+        }
+
         return ToResponse(settlement, lines);
+    }
+
+    /// <summary>
+    /// M30 — releases a batch entitlement by crediting the responsible doctor's partner ledger
+    /// (+ = the clinic owes the doctor), keyed <c>entitlement-{id}</c>. A 0 entitlement (toggle off)
+    /// credits nothing and needs no partner. Guards: <c>doctor_partner_missing</c> (the doctor must be a
+    /// registered doctor-partner to be paid) and <c>entitlement_already_credited</c> (never double-credit
+    /// the same accrual). Returns the credited amount (0 when nothing was posted).
+    /// </summary>
+    private async Task<decimal> ReleaseEntitlementAsync(
+        Batch batch, DoctorEntitlement entitlement, CancellationToken cancellationToken)
+    {
+        if (entitlement.ComputedAmount <= 0m)
+        {
+            return 0m; // toggle off / no fee — nothing to credit, no partner required
+        }
+
+        var partnerId = await _db.DoctorPartners
+            .Where(p => p.UserId == batch.ResponsibleDoctorId)
+            .Select(p => (Guid?)p.Id)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new ConflictException("doctor_partner_missing",
+                "The batch's responsible doctor is not a registered doctor-partner; create one before "
+                + "settling so the entitlement can be credited to their account.");
+
+        var partnerLedgerId = await _db.DoctorPartnerLedgers
+            .Where(l => l.DoctorPartnerId == partnerId)
+            .Select(l => l.Id)
+            .FirstAsync(cancellationToken);
+
+        if (await _db.DoctorPartnerLedgerEntries.AnyAsync(
+                e => e.DoctorEntitlementId == entitlement.Id, cancellationToken))
+        {
+            throw new ConflictException("entitlement_already_credited",
+                "This batch entitlement has already been credited to the doctor-partner ledger.");
+        }
+
+        await _doctorPartnerLedgers.AppendEntryAsync(
+            new DoctorPartnerLedgerEntryRequest(
+                Id: null,
+                DoctorPartnerLedgerId: partnerLedgerId,
+                EntryType: DoctorPartnerLedgerEntryType.Entitlement,
+                Amount: entitlement.ComputedAmount,
+                DoctorEntitlementId: entitlement.Id,
+                BatchId: batch.Id,
+                DoctorPartnerPaymentId: null,
+                Description: "استحقاق إشراف الدورة",
+                IdempotencyKey: $"entitlement-{entitlement.Id:N}"),
+            cancellationToken);
+
+        return entitlement.ComputedAmount;
     }
 
     private async Task<List<SettlementPreviewProduct>> BuildProductRowsAsync(

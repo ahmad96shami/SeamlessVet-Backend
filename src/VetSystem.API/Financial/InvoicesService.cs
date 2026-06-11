@@ -133,7 +133,15 @@ public sealed class InvoicesService
         var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == visitId, cancellationToken)
                     ?? throw new NotFoundException("visit", visitId);
 
-        await RequireBatchNotSettledAsync(visit.BatchId, cancellationToken);
+        // M30 — a visit under a batch (Dawra) is covered by the batch supervision fee; no separate exam
+        // fee (كشفية) is charged. Non-batch field visits still bill the exam fee (but create no entitlement),
+        // which makes the prior "batch not settled" check moot here (the visit can never carry a batch).
+        if (visit.BatchId is not null)
+        {
+            throw new ConflictException("exam_fee_covered_by_batch",
+                "This visit belongs to a batch (Dawra); the exam fee is covered by the batch supervision "
+                + "fee and cannot be charged separately.");
+        }
 
         var settings = await _db.SystemSettings.AsNoTracking()
             .FirstOrDefaultAsync(s => s.EnvironmentId == envId, cancellationToken);

@@ -252,8 +252,8 @@ builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.NegativeS
     VetSystem.API.Notifications.Handlers.NegativeStockAttemptedHandler>();
 builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.AccountReadyForSettlementEvent>,
     VetSystem.API.Notifications.Handlers.AccountReadyForSettlementHandler>();
-builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.EntitlementApprovedEvent>,
-    VetSystem.API.Notifications.Handlers.EntitlementApprovedHandler>();
+builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.EntitlementCreditedEvent>,
+    VetSystem.API.Notifications.Handlers.EntitlementCreditedHandler>();
 
 // Hangfire job classes — registered as services always so the recurring registration (real runs) and
 // the integration tests (forced clock, invoked directly) both resolve them from DI.

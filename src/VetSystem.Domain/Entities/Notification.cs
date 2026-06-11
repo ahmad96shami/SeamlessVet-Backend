@@ -37,12 +37,14 @@ public static class NotificationType
     public const string RegistrationRequest = "registration_request";
     public const string NegativeStock = "negative_stock";
     public const string AccountReadyForSettlement = "account_ready_for_settlement";
-    public const string EntitlementApproved = "entitlement_approved";
+
+    /// <summary>M30 — a batch settlement credited a doctor's entitlement to their partner balance.</summary>
+    public const string EntitlementCredited = "entitlement_credited";
     public const string ReportDelivery = "report_delivery";
 
     public static readonly IReadOnlyCollection<string> All =
     [
         AppointmentReminder, FollowUpDue, VaccinationDue, MedicationDue, LowStock, ExpiryWarning,
-        RegistrationRequest, NegativeStock, AccountReadyForSettlement, EntitlementApproved, ReportDelivery,
+        RegistrationRequest, NegativeStock, AccountReadyForSettlement, EntitlementCredited, ReportDelivery,
     ];
 }

@@ -61,7 +61,7 @@ public sealed class NotificationsIntegrationTests
     }
 
     [Fact]
-    public async Task EntitlementApprovedEvent_notifies_only_the_doctor()
+    public async Task EntitlementCreditedEvent_notifies_only_the_doctor()
     {
         await using var scope = await PgTestScope.CreateAsync();
         await AdminTestSeed.SeedAdminAsync(scope);
@@ -70,10 +70,10 @@ public sealed class NotificationsIntegrationTests
 
         var publisher = factory.Services.GetRequiredService<IDomainEventPublisher>();
         await publisher.PublishAsync(
-            new EntitlementApprovedEvent(scope.EnvironmentId, Guid.CreateVersion7(), doctorId, 65m, Guid.CreateVersion7()),
+            new EntitlementCreditedEvent(scope.EnvironmentId, Guid.CreateVersion7(), doctorId, Guid.CreateVersion7(), 65m),
             CancellationToken.None);
 
-        var recipients = await RecipientsOfTypeAsync(scope, NotificationType.EntitlementApproved);
+        var recipients = await RecipientsOfTypeAsync(scope, NotificationType.EntitlementCredited);
         recipients.Should().BeEquivalentTo([doctorId]);
     }
 

@@ -50,13 +50,13 @@ public sealed class NotificationsHubIntegrationTests
         {
             var dispatcher = s.ServiceProvider.GetRequiredService<INotificationDispatcher>();
             await dispatcher.DispatchAsync(
-                new NotificationDispatch(scope.EnvironmentId, [admin.Id], NotificationType.EntitlementApproved,
-                    "موافقة", "تمت الموافقة", new { amount = 65m }),
+                new NotificationDispatch(scope.EnvironmentId, [admin.Id], NotificationType.EntitlementCredited,
+                    "تقييد", "تم تقييد الاستحقاق", new { amount = 65m }),
                 CancellationToken.None);
         }
 
         var payload = await AwaitWithTimeout(received.Task);
-        payload.Type.Should().Be(NotificationType.EntitlementApproved);
+        payload.Type.Should().Be(NotificationType.EntitlementCredited);
     }
 
     [Fact]
