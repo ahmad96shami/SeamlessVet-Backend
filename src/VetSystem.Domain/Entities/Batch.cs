@@ -41,13 +41,9 @@ public sealed class Batch : Entity
     /// </summary>
     public bool? EntitlementEnabled { get; set; }
 
+    /// <summary>drug_profit | direct_fee — an accounting-only distinction in M28 (who funds the
+    /// supervision fee): System A carves it from the clinic margin, System B charges the farmer on top.</summary>
     public string? EntitlementSystem { get; set; }
-
-    /// <summary>For the drug-profit system (System A).</summary>
-    public decimal? DoctorSharePercent { get; set; }
-
-    /// <summary>Optional payout cap on the doctor's share (PRD §7.4 System A).</summary>
-    public decimal? DoctorShareCeiling { get; set; }
 
     public string Status { get; set; } = BatchStatus.Open;
 }

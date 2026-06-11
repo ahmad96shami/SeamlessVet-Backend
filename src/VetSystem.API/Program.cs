@@ -190,9 +190,11 @@ builder.Services.AddScoped<VetSystem.API.Contracts.ContractFarmsService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchesService>();
 builder.Services.AddScoped<VetSystem.API.Contracts.BatchSettlementService>(); // M24 — تصفية الدورة
 
-// M9 — doctor entitlements & settlement lock. The fee-model + System A/B calculators and the toggle
-// resolver are pure (no state), registered as singletons; the four IExamFeeCalculator impls are
-// enumerated by the factory to dispatch on supervision_fee_model.
+// M9 — doctor entitlements & settlement lock. The fee-model calculators and the toggle resolver are
+// pure (no state), registered as singletons; the four IExamFeeCalculator impls are enumerated by the
+// factory to dispatch on supervision_fee_model. (M28 — the supervision fee IS the entitlement in both
+// systems; the System-A percent/ceiling calculator is retired, the split math is pure in
+// EntitlementSplitCalculator, and the System-B calculator now serves only the visit-sourced path.)
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
     VetSystem.Application.Entitlements.FixedAmountExamFeeCalculator>();
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalculator,
@@ -205,8 +207,6 @@ builder.Services.AddSingleton<VetSystem.Application.Entitlements.IExamFeeCalcula
     VetSystem.Application.Entitlements.ExamFeeCalculatorFactory>();
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.IEntitlementToggleResolver,
     VetSystem.Application.Entitlements.EntitlementToggleResolver>();
-builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISystemADrugProfitCalculator,
-    VetSystem.Application.Entitlements.SystemADrugProfitCalculator>();
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISystemBDirectFeeCalculator,
     VetSystem.Application.Entitlements.SystemBDirectFeeCalculator>();
 builder.Services.AddSingleton<VetSystem.Application.Entitlements.ISettlementLockGuard,

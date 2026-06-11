@@ -35,6 +35,7 @@ public sealed class BatchSettlementService
     private readonly IOwnerLedgerResolver _ownerLedgers;
     private readonly IPricingService _pricing;
     private readonly IEntitlementService _entitlements;
+    private readonly IExamFeeCalculatorFactory _examFees;
 
     public BatchSettlementService(
         ApplicationDbContext db,
@@ -43,7 +44,8 @@ public sealed class BatchSettlementService
         ILedgerService ledgers,
         IOwnerLedgerResolver ownerLedgers,
         IPricingService pricing,
-        IEntitlementService entitlements)
+        IEntitlementService entitlements,
+        IExamFeeCalculatorFactory examFees)
     {
         _db = db;
         _currentUser = currentUser;
@@ -52,6 +54,7 @@ public sealed class BatchSettlementService
         _ownerLedgers = ownerLedgers;
         _pricing = pricing;
         _entitlements = entitlements;
+        _examFees = examFees;
     }
 
     public async Task<BatchSettlementPreviewResponse> PreviewAsync(Guid batchId, CancellationToken cancellationToken)
@@ -92,6 +95,11 @@ public sealed class BatchSettlementService
             .Select(i => new SettlementPreviewInvoice(i.Id, i.Number, i.InvoiceType, i.IssuedAt, i.Total))
             .ToList();
 
+        // M28 — the supervision fee at the current (un-repriced) revenue, so the settle screen can show
+        // the doctor's projected entitlement and (System B) the amount the farmer will be charged on top.
+        var supervisionFee = Money(_examFees.For(batch.SupervisionFeeModel)
+            .Calculate(new ExamFeeBasis(batch.SupervisionFeeValue, batch.AnimalCount, originalTotal)));
+
         return new BatchSettlementPreviewResponse(
             batch.Id,
             batch.Status,
@@ -108,8 +116,7 @@ public sealed class BatchSettlementService
             batch.SupervisionFeeValue,
             batch.EntitlementEnabled,
             batch.EntitlementSystem,
-            batch.DoctorSharePercent,
-            batch.DoctorShareCeiling,
+            supervisionFee,
             originalTotal,
             ledgerId,
             ledger?.Balance ?? 0m,
@@ -219,6 +226,17 @@ public sealed class BatchSettlementService
         }
 
         var discount = Money(request.DiscountAmount);
+
+        // M28 — the supervision fee on the settled (pre-discount) revenue. For a System-B (direct_fee)
+        // batch the farmer pays it on top: it lands in settled_total and as a +supervision_fee owner
+        // ledger adjustment below (after reprice + discount). System A funds it from the clinic margin,
+        // so it never touches the farmer's bill. The snapshot is the entitlement amount the engine will
+        // compute on these same numbers (ExplainForBatchAsync recomputes identically).
+        var settledRevenue = originalTotal + repricingDelta;
+        var supervisionFee = Money(_examFees.For(batch.SupervisionFeeModel)
+            .Calculate(new ExamFeeBasis(batch.SupervisionFeeValue, batch.AnimalCount, settledRevenue)));
+        var feeChargedToFarmer = batch.EntitlementSystem == EntitlementSystem.DirectFee ? supervisionFee : 0m;
+
         var settlement = new BatchSettlement
         {
             Id = request.Id ?? Guid.Empty,
@@ -226,7 +244,8 @@ public sealed class BatchSettlementService
             RepricingDelta = Money(repricingDelta),
             DiscountAmount = discount,
             OriginalTotal = originalTotal,
-            SettledTotal = Money(originalTotal + repricingDelta - discount),
+            SettledTotal = Money(originalTotal + repricingDelta - discount + feeChargedToFarmer),
+            SupervisionFee = supervisionFee,
             Notes = request.Notes,
             SettledBy = userId,
             SettledAt = _clock.UtcNow,
@@ -289,6 +308,24 @@ public sealed class BatchSettlementService
                 cancellationToken);
         }
 
+        // M28 — System B charges the supervision fee to the farmer on top of the drugs (after reprice +
+        // discount). A System-A batch funds the doctor's fee from the clinic's own margin, so no ledger
+        // charge is raised here. Deterministic key collapses a mid-transaction retry instead of double-post.
+        if (feeChargedToFarmer > 0m)
+        {
+            await _ledgers.AppendEntryAsync(
+                new LedgerEntryRequest(
+                    Id: null,
+                    LedgerId: ledgerId,
+                    EntryType: LedgerEntryType.Adjustment,
+                    Amount: feeChargedToFarmer,
+                    InvoiceId: null,
+                    ReceiptVoucherId: null,
+                    Description: "رسوم إشراف الطبيب (تصفية)",
+                    IdempotencyKey: $"settle-supervision-{settlement.Id:N}"),
+                cancellationToken);
+        }
+
         // Close the cycle and compute the doctor's pending entitlement on the settled numbers,
         // atomically with the settlement itself (mirrors BatchesService.UpdateAsync's close path).
         batch.Status = BatchStatus.Closed;
@@ -344,6 +381,7 @@ public sealed class BatchSettlementService
             settlement.DiscountAmount,
             settlement.OriginalTotal,
             settlement.SettledTotal,
+            settlement.SupervisionFee,
             settlement.Notes,
             settlement.SettledBy,
             settlement.SettledAt,

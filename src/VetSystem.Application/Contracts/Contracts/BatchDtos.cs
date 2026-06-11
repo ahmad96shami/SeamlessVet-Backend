@@ -3,9 +3,9 @@ namespace VetSystem.Application.Contracts.Contracts;
 /// <summary>
 /// SCHEMA §5 batch (Dawra/Cycle) payload (PRD §7.2). <c>EntitlementEnabled</c> is a tri-state:
 /// <c>null</c> inherits <c>system_settings.entitlement_enabled_global</c>, <c>true</c>/<c>false</c>
-/// override per batch (SCHEMA "Key invariants" #4). The fee model + share fields feed M9's
-/// entitlement calculation. Batch financial configuration is an Admin/Accountant operation
-/// (PRD §7, §8.9).
+/// override per batch (SCHEMA "Key invariants" #4). The supervision-fee model + value + system feed the
+/// M28 entitlement calculation (the fee IS the doctor's entitlement; no share %/ceiling). Batch
+/// financial configuration is an Admin/Accountant operation (PRD §7, §8.9).
 /// </summary>
 public sealed record BatchCreateRequest(
     Guid? Id,
@@ -20,8 +20,6 @@ public sealed record BatchCreateRequest(
     decimal SupervisionFeeValue,
     bool? EntitlementEnabled,
     string? EntitlementSystem,
-    decimal? DoctorSharePercent,
-    decimal? DoctorShareCeiling,
     string? Status);
 
 /// <summary>
@@ -40,8 +38,6 @@ public sealed record BatchPatchRequest(
     decimal? SupervisionFeeValue,
     bool? EntitlementEnabled,
     string? EntitlementSystem,
-    decimal? DoctorSharePercent,
-    decimal? DoctorShareCeiling,
     string? Status);
 
 public sealed record BatchResponse(
@@ -57,8 +53,6 @@ public sealed record BatchResponse(
     decimal SupervisionFeeValue,
     bool? EntitlementEnabled,
     string? EntitlementSystem,
-    decimal? DoctorSharePercent,
-    decimal? DoctorShareCeiling,
     string Status,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,

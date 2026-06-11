@@ -71,7 +71,10 @@ public static class ReportLabels
     public const string ExamFee = "رسوم الكشف";
     public const string DoctorShare = "حصة الطبيب";
     public const string ClinicShare = "حصة العيادة";
-    public const string CeilingApplied = "السقف المطبَّق";
+    public const string SupervisionFee = "رسوم الإشراف";                 // M28
+    public const string FeeAddedToSettlement = "رسوم محمّلة على المربّي"; // M28 — System B
+    public const string FeeRetainedByClinic = "رسوم محتجزة للعيادة";      // M28 — toggle off (System B)
+    public const string SettlementDiscount = "خصم التصفية";              // M24
     public const string EntitlementEnabled = "المستحقات مفعّلة";
     public const string TotalCount = "إجمالي السجلات";
     public const string InvoiceCount = "عدد الفواتير";

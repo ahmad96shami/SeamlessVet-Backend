@@ -26,9 +26,6 @@ public sealed class BatchCreateRequestValidator : AbstractValidator<BatchCreateR
             .WithMessage($"entitlement_system must be one of: {string.Join(", ", EntitlementSystem.All)}.")
             .When(r => r.EntitlementSystem is not null);
 
-        RuleFor(r => r.DoctorSharePercent!.Value).InclusiveBetween(0m, 100m).When(r => r.DoctorSharePercent.HasValue);
-        RuleFor(r => r.DoctorShareCeiling!.Value).GreaterThanOrEqualTo(0m).When(r => r.DoctorShareCeiling.HasValue);
-
         RuleFor(r => r.Status!)
             .Must(BatchStatus.All.Contains)
             .WithMessage($"status must be one of: {string.Join(", ", BatchStatus.All)}.")
@@ -57,9 +54,6 @@ public sealed class BatchPatchRequestValidator : AbstractValidator<BatchPatchReq
             .Must(EntitlementSystem.All.Contains)
             .WithMessage($"entitlement_system must be one of: {string.Join(", ", EntitlementSystem.All)}.")
             .When(r => r.EntitlementSystem is not null);
-
-        RuleFor(r => r.DoctorSharePercent!.Value).InclusiveBetween(0m, 100m).When(r => r.DoctorSharePercent.HasValue);
-        RuleFor(r => r.DoctorShareCeiling!.Value).GreaterThanOrEqualTo(0m).When(r => r.DoctorShareCeiling.HasValue);
 
         RuleFor(r => r.Status!)
             .Must(BatchStatus.All.Contains)

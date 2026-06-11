@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using VetSystem.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using VetSystem.Infrastructure.Persistence;
 namespace VetSystem.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260611122328_M28_BatchSettlementSupervisionFee")]
+    partial class M28_BatchSettlementSupervisionFee
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -243,6 +246,14 @@ namespace VetSystem.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset?>("DeletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("deleted_at");
+
+                    b.Property<decimal?>("DoctorShareCeiling")
+                        .HasColumnType("numeric(14,2)")
+                        .HasColumnName("doctor_share_ceiling");
+
+                    b.Property<decimal?>("DoctorSharePercent")
+                        .HasColumnType("numeric(5,2)")
+                        .HasColumnName("doctor_share_percent");
 
                     b.Property<DateOnly?>("EndDate")
                         .HasColumnType("date")
@@ -1000,6 +1011,10 @@ namespace VetSystem.Infrastructure.Persistence.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)")
                         .HasColumnName("calculation_system");
+
+                    b.Property<decimal?>("CeilingApplied")
+                        .HasColumnType("numeric(14,2)")
+                        .HasColumnName("ceiling_applied");
 
                     b.Property<decimal>("ComputedAmount")
                         .HasColumnType("numeric(14,2)")

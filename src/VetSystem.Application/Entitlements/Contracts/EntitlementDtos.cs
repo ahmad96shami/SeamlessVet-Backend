@@ -8,7 +8,6 @@ public sealed record DoctorEntitlementResponse(
     Guid? VisitId,
     string CalculationSystem,
     decimal ComputedAmount,
-    decimal? CeilingApplied,
     string Status,
     Guid? ApprovedBy,
     DateTimeOffset? ApprovedAt,

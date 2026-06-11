@@ -33,15 +33,20 @@ public interface IEntitlementService
 }
 
 /// <summary>
-/// The drug-profit accounting for one batch (PRD §7.4, §7.9). <see cref="DoctorShare"/> equals the
-/// computed <see cref="DoctorEntitlement.ComputedAmount"/> for the batch. <see cref="ClinicShare"/> is
-/// the drug profit the clinic keeps: under System A it is <c>DrugProfit − DoctorShare</c> (the doctor's
-/// share comes out of drug profit); under System B or when the toggle is disabled it is the whole
-/// <c>DrugProfit</c> (the doctor's fee, if any, is paid separately — not out of drug profit).
+/// The drug-profit accounting for one batch (PRD §7.4, §7.9; M28 reformulation). <see cref="DoctorShare"/>
+/// equals the computed <see cref="DoctorEntitlement.ComputedAmount"/> — the supervision fee (
+/// <see cref="ExamFee"/>) in full when the toggle is enabled, else 0 (no percentage, no ceiling, no
+/// clamp). <see cref="ClinicShare"/> is what the clinic keeps and may be <b>negative</b>; the single
+/// identity is <c>ClinicShare = DrugProfit + FeeAddedToSettlement − SettlementDiscount − DoctorShare</c>:
+/// <list type="bullet">
+/// <item>System A funds the fee from the clinic's margin (<c>DrugProfit − fee − discount</c>);</item>
+/// <item>System B charges the farmer the fee on top (<see cref="FeeAddedToSettlement"/>) and passes it on
+/// (<c>DrugProfit − discount</c>);</item>
+/// <item>toggle off keeps the fee with the clinic in System B (<see cref="FeeRetainedByClinic"/>).</item>
+/// </list>
 /// <para>M24 — for a settled batch every figure is on the settled numbers: <see cref="Revenue"/>
 /// includes the repricing delta, sale values resolve through the settlement lines, and
-/// <see cref="SettlementDiscount"/> (deducted from the System-A basis like the exam fee) is surfaced
-/// so per-batch reporting can show the clinic's true net.</para>
+/// <see cref="SettlementDiscount"/> is surfaced so per-batch reporting can show the clinic's true net.</para>
 /// </summary>
 public sealed record BatchEntitlementBreakdown(
     Guid BatchId,
@@ -55,6 +60,7 @@ public sealed record BatchEntitlementBreakdown(
     decimal DrugProfit,
     decimal ExamFee,
     decimal DoctorShare,
-    decimal? CeilingApplied,
     decimal ClinicShare,
+    decimal FeeAddedToSettlement = 0m,
+    decimal FeeRetainedByClinic = 0m,
     decimal SettlementDiscount = 0m);

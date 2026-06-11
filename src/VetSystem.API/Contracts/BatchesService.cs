@@ -137,8 +137,6 @@ public sealed class BatchesService
             SupervisionFeeValue = request.SupervisionFeeValue,
             EntitlementEnabled = request.EntitlementEnabled,
             EntitlementSystem = request.EntitlementSystem,
-            DoctorSharePercent = request.DoctorSharePercent,
-            DoctorShareCeiling = request.DoctorShareCeiling,
             Status = request.Status ?? BatchStatus.Open,
         };
 
@@ -182,8 +180,6 @@ public sealed class BatchesService
         if (request.SupervisionFeeValue.HasValue) batch.SupervisionFeeValue = request.SupervisionFeeValue.Value;
         if (request.EntitlementEnabled.HasValue) batch.EntitlementEnabled = request.EntitlementEnabled;
         if (request.EntitlementSystem is not null) batch.EntitlementSystem = request.EntitlementSystem;
-        if (request.DoctorSharePercent.HasValue) batch.DoctorSharePercent = request.DoctorSharePercent;
-        if (request.DoctorShareCeiling.HasValue) batch.DoctorShareCeiling = request.DoctorShareCeiling;
 
         var wasClosed = batch.Status == BatchStatus.Closed;
         if (request.Status is not null) batch.Status = request.Status;

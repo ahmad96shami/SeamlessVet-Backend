@@ -22,8 +22,6 @@ internal sealed class BatchConfiguration : IEntityTypeConfiguration<Batch>
         builder.Property(b => b.SupervisionFeeValue).HasColumnName("supervision_fee_value").HasColumnType("numeric(14,2)").IsRequired();
         builder.Property(b => b.EntitlementEnabled).HasColumnName("entitlement_enabled");
         builder.Property(b => b.EntitlementSystem).HasColumnName("entitlement_system").HasMaxLength(16);
-        builder.Property(b => b.DoctorSharePercent).HasColumnName("doctor_share_percent").HasColumnType("numeric(5,2)");
-        builder.Property(b => b.DoctorShareCeiling).HasColumnName("doctor_share_ceiling").HasColumnType("numeric(14,2)");
         builder.Property(b => b.Status).HasColumnName("status").IsRequired().HasMaxLength(16);
 
         builder.ToTable(t => t.HasCheckConstraint(

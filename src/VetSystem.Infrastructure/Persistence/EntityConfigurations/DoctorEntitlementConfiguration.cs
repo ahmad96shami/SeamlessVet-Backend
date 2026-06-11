@@ -16,7 +16,6 @@ internal sealed class DoctorEntitlementConfiguration : IEntityTypeConfiguration<
         builder.Property(e => e.VisitId).HasColumnName("visit_id");
         builder.Property(e => e.CalculationSystem).HasColumnName("calculation_system").IsRequired().HasMaxLength(16);
         builder.Property(e => e.ComputedAmount).HasColumnName("computed_amount").HasColumnType("numeric(14,2)").IsRequired();
-        builder.Property(e => e.CeilingApplied).HasColumnName("ceiling_applied").HasColumnType("numeric(14,2)");
         builder.Property(e => e.Status).HasColumnName("status").IsRequired().HasMaxLength(16);
         builder.Property(e => e.ApprovedBy).HasColumnName("approved_by");
         builder.Property(e => e.ApprovedAt).HasColumnName("approved_at");

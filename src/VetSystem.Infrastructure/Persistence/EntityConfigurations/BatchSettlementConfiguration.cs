@@ -16,6 +16,7 @@ internal sealed class BatchSettlementConfiguration : IEntityTypeConfiguration<Ba
         builder.Property(s => s.DiscountAmount).HasColumnName("discount_amount").HasColumnType("numeric(14,2)").IsRequired();
         builder.Property(s => s.OriginalTotal).HasColumnName("original_total").HasColumnType("numeric(14,2)").IsRequired();
         builder.Property(s => s.SettledTotal).HasColumnName("settled_total").HasColumnType("numeric(14,2)").IsRequired();
+        builder.Property(s => s.SupervisionFee).HasColumnName("supervision_fee").HasColumnType("numeric(14,2)").IsRequired();
         builder.Property(s => s.Notes).HasColumnName("notes");
         builder.Property(s => s.SettledBy).HasColumnName("settled_by").IsRequired();
         builder.Property(s => s.SettledAt).HasColumnName("settled_at").IsRequired();
@@ -23,6 +24,8 @@ internal sealed class BatchSettlementConfiguration : IEntityTypeConfiguration<Ba
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_batch_settlements_discount", "discount_amount >= 0"));
+        builder.ToTable(t => t.HasCheckConstraint(
+            "ck_batch_settlements_supervision_fee", "supervision_fee >= 0"));
 
         // One settlement per batch — the concurrency backstop for racing settle calls.
         // Partial on deleted_at so a (manual, admin-level) soft delete can free the slot.

@@ -26,9 +26,14 @@ public sealed class BatchSettlement : Entity
     /// <summary>Σ effective (non-void) invoice totals at settlement time — audit snapshot.</summary>
     public decimal OriginalTotal { get; set; }
 
-    /// <summary><c>original_total + repricing_delta − discount_amount</c> — what the cycle is worth
-    /// after the negotiation.</summary>
+    /// <summary><c>original_total + repricing_delta − discount_amount</c>, plus the supervision fee for a
+    /// System-B batch (the farmer pays it on top) — what the cycle is worth after the negotiation.</summary>
     public decimal SettledTotal { get; set; }
+
+    /// <summary>M28 — the supervision fee computed on the settled (pre-discount) revenue at settle time.
+    /// Audit snapshot of the doctor's entitlement amount; for a System-B (<c>direct_fee</c>) batch it is
+    /// also charged to the farmer as a <c>+supervision_fee</c> owner-ledger adjustment. Always ≥ 0.</summary>
+    public decimal SupervisionFee { get; set; }
 
     public string? Notes { get; set; }
 

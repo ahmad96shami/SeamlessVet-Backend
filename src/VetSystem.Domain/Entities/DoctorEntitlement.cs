@@ -24,14 +24,13 @@ public sealed class DoctorEntitlement : Entity
     /// <summary>Set when this entitlement is sourced by a single visit. Null for a batch-sourced one.</summary>
     public Guid? VisitId { get; set; }
 
-    /// <summary>Which mechanism produced <see cref="ComputedAmount"/> (PRD §7.4): drug_profit | direct_fee.</summary>
+    /// <summary>Which mechanism produced <see cref="ComputedAmount"/> (PRD §7.4): drug_profit | direct_fee.
+    /// In M28 this is accounting-only — the amount is the supervision fee under both.</summary>
     public string CalculationSystem { get; set; } = EntitlementSystem.DrugProfit;
 
-    /// <summary>The doctor's share, after the exam-fee deduction, ceiling cap, and toggle (0 when disabled).</summary>
+    /// <summary>The doctor's entitlement — the supervision fee in full when the toggle is enabled, else 0
+    /// (M28: no percentage, no ceiling, no clamp).</summary>
     public decimal ComputedAmount { get; set; }
-
-    /// <summary>The cap value when <see cref="DoctorShareCeiling"/> bound the result; null when no cap was hit.</summary>
-    public decimal? CeilingApplied { get; set; }
 
     public string Status { get; set; } = EntitlementStatus.Pending;
 

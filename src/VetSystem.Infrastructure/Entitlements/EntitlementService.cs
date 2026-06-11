@@ -27,7 +27,6 @@ public sealed class EntitlementService : IEntitlementService
     private readonly IPricingService _pricing;
     private readonly IExamFeeCalculatorFactory _examFees;
     private readonly IEntitlementToggleResolver _toggle;
-    private readonly ISystemADrugProfitCalculator _systemA;
     private readonly ISystemBDirectFeeCalculator _systemB;
 
     public EntitlementService(
@@ -36,7 +35,6 @@ public sealed class EntitlementService : IEntitlementService
         IPricingService pricing,
         IExamFeeCalculatorFactory examFees,
         IEntitlementToggleResolver toggle,
-        ISystemADrugProfitCalculator systemA,
         ISystemBDirectFeeCalculator systemB)
     {
         _db = db;
@@ -44,7 +42,6 @@ public sealed class EntitlementService : IEntitlementService
         _pricing = pricing;
         _examFees = examFees;
         _toggle = toggle;
-        _systemA = systemA;
         _systemB = systemB;
     }
 
@@ -58,7 +55,7 @@ public sealed class EntitlementService : IEntitlementService
             batchId: batchId,
             visitId: null,
             breakdown.System,
-            new EntitlementAmount(breakdown.DoctorShare, breakdown.CeilingApplied),
+            breakdown.DoctorShare,
             cancellationToken);
     }
 
@@ -86,7 +83,7 @@ public sealed class EntitlementService : IEntitlementService
         // sale_value (task 6 + M24): the settlement-line price where the batch is settled and the
         // product has one, else the contract-overridden price where an active contract applies on the
         // invoice date, else the line's snapshotted unit_price. cost is the line's cost_price snapshot.
-        var lines = new List<DrugProfitLine>(productItems.Count);
+        var drugProfit = 0m;
         var drugCost = 0m;
         foreach (var item in productItems)
         {
@@ -102,49 +99,28 @@ public sealed class EntitlementService : IEntitlementService
                 saleValue = resolved.IsContractPrice ? resolved.UnitPrice : item.UnitPrice;
             }
 
-            lines.Add(new DrugProfitLine(saleValue, item.CostPrice, item.Quantity));
+            drugProfit += (saleValue - item.CostPrice) * item.Quantity;
             drugCost += item.CostPrice * item.Quantity;
         }
-        var drugProfit = lines.Sum(l => (l.SaleValue - l.Cost) * l.Quantity);
 
-        var examFee = _examFees.For(batch.SupervisionFeeModel)
+        // M28 — the supervision fee IS the doctor's entitlement (both systems). The percent-of-invoice
+        // model computes on the settled (pre-discount) revenue, mirroring SettleAsync's snapshot.
+        var supervisionFee = _examFees.For(batch.SupervisionFeeModel)
             .Calculate(new ExamFeeBasis(batch.SupervisionFeeValue, batch.AnimalCount, revenue));
 
         var enabled = _toggle.IsEnabled(batch.EntitlementEnabled, await GlobalToggleAsync(cancellationToken));
 
-        string system;
-        EntitlementAmount amount;
-        if (!enabled)
-        {
-            // Disabled ⇒ all profit to the clinic (invariant #4). Record a 0 row for audit.
-            system = batch.EntitlementSystem ?? EntitlementSystem.DrugProfit;
-            amount = new EntitlementAmount(0m, null);
-        }
-        else
-        {
-            system = batch.EntitlementSystem
-                     ?? throw new ConflictException("entitlement_system_unset",
-                         $"Batch '{batchId}' has the entitlement system enabled but no entitlement_system set.");
-            amount = system switch
-            {
-                EntitlementSystem.DrugProfit => _systemA.Calculate(
-                    new SystemAInput(
-                        lines, examFee, batch.DoctorSharePercent ?? 0m, batch.DoctorShareCeiling,
-                        SettlementDiscount: settlement?.DiscountAmount ?? 0m)),
-                EntitlementSystem.DirectFee => _systemB.Calculate(examFee),
-                _ => throw new ConflictException("invalid_entitlement_system", $"Unknown entitlement system '{system}'."),
-            };
-        }
+        // The system is needed even when disabled (System B still charges the farmer the fee), so it must
+        // be set whenever the batch carries any entitlement intent. Default to drug_profit only when both
+        // the toggle is off AND no system was configured (no fee changes hands either way).
+        var system = batch.EntitlementSystem
+                     ?? (enabled
+                         ? throw new ConflictException("entitlement_system_unset",
+                             $"Batch '{batchId}' has the entitlement system enabled but no entitlement_system set.")
+                         : EntitlementSystem.DrugProfit);
 
-        // Under System A the doctor's share comes out of drug profit, so the clinic keeps the rest;
-        // under System B / when disabled the doctor's fee is paid separately, so the clinic keeps all
-        // of it. M24 — the settlement discount is money the clinic handed back to the farmer, so it
-        // leaves the clinic's slice of the pool either way (the doctor already bore their pct of it
-        // through the basis). Pie check: (drugProfit − discount) == doctorShare + clinicShare.
         var discountAmount = settlement?.DiscountAmount ?? 0m;
-        var clinicShare = system == EntitlementSystem.DrugProfit
-            ? drugProfit - amount.ComputedAmount - discountAmount
-            : drugProfit - discountAmount;
+        var split = EntitlementSplitCalculator.Resolve(system, enabled, drugProfit, supervisionFee, discountAmount);
 
         return new BatchEntitlementBreakdown(
             batchId,
@@ -156,11 +132,12 @@ public sealed class EntitlementService : IEntitlementService
             revenue,
             drugCost,
             drugProfit,
-            examFee,
-            amount.ComputedAmount,
-            amount.CeilingApplied,
-            clinicShare,
-            SettlementDiscount: settlement?.DiscountAmount ?? 0m);
+            supervisionFee,
+            split.DoctorShare,
+            split.ClinicShare,
+            FeeAddedToSettlement: split.FeeAddedToSettlement,
+            FeeRetainedByClinic: split.FeeRetainedByClinic,
+            SettlementDiscount: discountAmount);
     }
 
     public async Task<DoctorEntitlement?> ComputeForVisitAsync(Guid visitId, CancellationToken cancellationToken)
@@ -179,7 +156,7 @@ public sealed class EntitlementService : IEntitlementService
         }
 
         var enabled = _toggle.IsEnabled(perBatchOverride: null, await GlobalToggleAsync(cancellationToken));
-        var amount = enabled ? _systemB.Calculate(fee) : new EntitlementAmount(0m, null);
+        var computedAmount = enabled ? _systemB.Calculate(fee).ComputedAmount : 0m;
 
         return await UpsertAsync(
             e => e.VisitId == visitId,
@@ -187,7 +164,7 @@ public sealed class EntitlementService : IEntitlementService
             batchId: null,
             visitId: visitId,
             EntitlementSystem.DirectFee,
-            amount,
+            computedAmount,
             cancellationToken);
     }
 
@@ -215,7 +192,7 @@ public sealed class EntitlementService : IEntitlementService
         Guid? batchId,
         Guid? visitId,
         string system,
-        EntitlementAmount amount,
+        decimal computedAmount,
         CancellationToken cancellationToken)
     {
         var existing = await _db.DoctorEntitlements.FirstOrDefaultAsync(match, cancellationToken);
@@ -230,8 +207,7 @@ public sealed class EntitlementService : IEntitlementService
 
             existing.DoctorId = doctorId;
             existing.CalculationSystem = system;
-            existing.ComputedAmount = amount.ComputedAmount;
-            existing.CeilingApplied = amount.CeilingApplied;
+            existing.ComputedAmount = computedAmount;
             await _db.SaveChangesAsync(cancellationToken);
             return existing;
         }
@@ -243,8 +219,7 @@ public sealed class EntitlementService : IEntitlementService
             BatchId = batchId,
             VisitId = visitId,
             CalculationSystem = system,
-            ComputedAmount = amount.ComputedAmount,
-            CeilingApplied = amount.CeilingApplied,
+            ComputedAmount = computedAmount,
             Status = EntitlementStatus.Pending,
         };
 

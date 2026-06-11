@@ -53,12 +53,13 @@ public sealed class ProfitPerBatchReportService
             breakdown.DrugProfit,
             breakdown.ExamFee,
             breakdown.DoctorShare,
-            breakdown.CeilingApplied,
             breakdown.ClinicShare,
             asOf,
             split.DistributedTotal,
             split.Retained,
             split.Allocations,
+            FeeAddedToSettlement: breakdown.FeeAddedToSettlement,
+            FeeRetainedByClinic: breakdown.FeeRetainedByClinic,
             SettlementDiscount: breakdown.SettlementDiscount);
     }
 }
