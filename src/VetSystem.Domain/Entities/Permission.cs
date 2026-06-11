@@ -59,6 +59,10 @@ public static class PermissionKey
     public const string DoctorPartnersManage = "doctor_partners.manage";
     public const string DoctorPartnersPay = "doctor_partners.pay";
 
+    // Employees & their HR salary/loan ledger (M31)
+    public const string EmployeesManage = "employees.manage";
+    public const string EmployeesPay = "employees.pay";
+
     public static readonly IReadOnlyCollection<string> All =
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
@@ -73,5 +77,6 @@ public static class PermissionKey
         ReportsRead,
         SuppliersWrite,
         DoctorPartnersManage, DoctorPartnersPay,
+        EmployeesManage, EmployeesPay,
     ];
 }

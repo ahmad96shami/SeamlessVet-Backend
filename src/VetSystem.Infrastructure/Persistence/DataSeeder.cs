@@ -677,6 +677,9 @@ public sealed class DataSeeder
                 // M30: the accountant manages doctor-partners and pays their entitlement balances.
                 PermissionKey.DoctorPartnersManage,
                 PermissionKey.DoctorPartnersPay,
+                // M31: the accountant manages employees (salaries/loans) and pays them.
+                PermissionKey.EmployeesManage,
+                PermissionKey.EmployeesPay,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -732,6 +735,8 @@ public sealed class DataSeeder
         PermissionKey.SuppliersWrite => "Manage suppliers, record purchase invoices, and pay suppliers.",
         PermissionKey.DoctorPartnersManage => "Manage doctor-partners (entitlement payees) and view their balances.",
         PermissionKey.DoctorPartnersPay => "Pay doctor-partners against their entitlement balances.",
+        PermissionKey.EmployeesManage => "Manage employees (salaries, loans) and view their HR ledger balances.",
+        PermissionKey.EmployeesPay => "Pay employees (salaries, loans, repayments).",
         _ => key,
     };
 }
