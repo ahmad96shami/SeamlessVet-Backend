@@ -46,6 +46,10 @@ public sealed class InventoryMovement : Entity
     /// <summary>M19 — set on a <c>receive</c> leg written by a purchase invoice; links stock to its source.</summary>
     public Guid? PurchaseInvoiceId { get; set; }
 
+    /// <summary>M25 — the lot this leg created (receive / transfer credit) or drew from (single-lot
+    /// deduction); null when a deduction split across multiple lots (FEFO).</summary>
+    public Guid? LotId { get; set; }
+
     public Guid PerformedBy { get; set; }
 
     public string IdempotencyKey { get; set; } = string.Empty;

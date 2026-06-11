@@ -32,6 +32,9 @@ internal sealed class PrescriptionConfiguration : IEntityTypeConfiguration<Presc
         builder.Property(p => p.DosesCount).HasColumnName("doses_count");
         builder.Property(p => p.LastRemindedDose).HasColumnName("last_reminded_dose");
 
+        // M25 — FEFO cost captured at administration; snapshotted onto a billable in-clinic line's cost_price.
+        builder.Property(p => p.ResolvedUnitCost).HasColumnName("resolved_unit_cost").HasColumnType("numeric(14,2)");
+
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_prescriptions_dispense_type",
             "dispense_type IN ('administered_in_clinic','dispensed_to_owner')"));

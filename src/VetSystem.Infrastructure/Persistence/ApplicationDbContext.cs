@@ -45,6 +45,7 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<FieldInventory> FieldInventories => Set<FieldInventory>();
     public DbSet<StockItem> StockItems => Set<StockItem>();
     public DbSet<InventoryMovement> InventoryMovements => Set<InventoryMovement>();
+    public DbSet<InventoryLot> InventoryLots => Set<InventoryLot>();
 
     public DbSet<Visit> Visits => Set<Visit>();
     public DbSet<Procedure> Procedures => Set<Procedure>();

@@ -17,6 +17,7 @@ internal sealed class PurchaseInvoiceItemConfiguration : IEntityTypeConfiguratio
         builder.Property(i => i.UnitCost).HasColumnName("unit_cost").HasColumnType("numeric(14,2)");
         builder.Property(i => i.DiscountAmount).HasColumnName("discount_amount").HasColumnType("numeric(14,2)");
         builder.Property(i => i.LineTotal).HasColumnName("line_total").HasColumnType("numeric(14,2)");
+        builder.Property(i => i.ExpirationDate).HasColumnName("expiration_date");
 
         builder.HasIndex(i => i.PurchaseInvoiceId).HasDatabaseName("ix_purchase_invoice_items_invoice");
 

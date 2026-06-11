@@ -22,6 +22,7 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.Property(m => m.VisitId).HasColumnName("visit_id");
         builder.Property(m => m.InvoiceId).HasColumnName("invoice_id");
         builder.Property(m => m.PurchaseInvoiceId).HasColumnName("purchase_invoice_id");
+        builder.Property(m => m.LotId).HasColumnName("lot_id");
         builder.Property(m => m.PerformedBy).HasColumnName("performed_by").IsRequired();
         builder.Property(m => m.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
 
@@ -71,6 +72,12 @@ internal sealed class InventoryMovementConfiguration : IEntityTypeConfiguration<
         builder.HasOne<PurchaseInvoice>()
             .WithMany()
             .HasForeignKey(m => m.PurchaseInvoiceId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        // M25 — the lot this movement created or drew from (FEFO costing).
+        builder.HasOne<InventoryLot>()
+            .WithMany()
+            .HasForeignKey(m => m.LotId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -22,4 +22,7 @@ public sealed class PurchaseInvoiceItem : Entity
     public decimal DiscountAmount { get; set; }
 
     public decimal LineTotal { get; set; }
+
+    /// <summary>M25 — expiry of the goods received on this line; carried onto the created lot for FEFO.</summary>
+    public DateOnly? ExpirationDate { get; set; }
 }

@@ -69,6 +69,16 @@ public sealed class Prescription : Entity
     /// Clients never write it.
     /// </summary>
     public int? LastRemindedDose { get; set; }
+
+    /// <summary>
+    /// M25 — the lot-accurate FEFO weighted-average unit cost captured when an
+    /// <c>administered_in_clinic</c> medication's stock was deducted at recording. A billable
+    /// in-clinic med (M23) snapshots this onto its invoice line's <c>cost_price</c> at issuance
+    /// (the stock — and therefore the COGS — already moved). Null for <c>dispensed_to_owner</c> rows
+    /// (their cost is resolved when the sale deducts) and for legacy/non-deducting records.
+    /// Server-managed; clients never write it.
+    /// </summary>
+    public decimal? ResolvedUnitCost { get; set; }
 }
 
 public static class DispenseType
