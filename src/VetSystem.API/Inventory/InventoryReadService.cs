@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using VetSystem.Application.Common;
 using VetSystem.Application.Inventory.Contracts;
 using VetSystem.Application.Reports;
 using VetSystem.Domain.Common;
@@ -18,10 +19,12 @@ namespace VetSystem.API.Inventory;
 public sealed class InventoryReadService
 {
     private readonly ApplicationDbContext _db;
+    private readonly IClock _clock;
 
-    public InventoryReadService(ApplicationDbContext db)
+    public InventoryReadService(ApplicationDbContext db, IClock clock)
     {
         _db = db;
+        _clock = clock;
     }
 
     /// <summary>
@@ -180,6 +183,116 @@ public sealed class InventoryReadService
     }
 
     /// <summary>
+    /// GET /inventory/lots — the FEFO lots of one product (the web's lot-detail view, the REST mirror
+    /// of the field device's PowerSync <c>inventory_lots</c> read). Optional
+    /// <paramref name="locationType"/>/<paramref name="locationId"/> narrow to one location; by default
+    /// only on-hand lots (<c>remaining_qty &gt; 0</c>) are returned (<paramref name="onHandOnly"/> =
+    /// false includes depleted lots). Ordered FEFO — earliest-expiry first, never-expiring last — the
+    /// same order <see cref="VetSystem.Application.Inventory.FefoPlanner"/> consumes them.
+    /// </summary>
+    public async Task<IReadOnlyList<InventoryLotResponse>> ListLotsAsync(
+        Guid productId,
+        string? locationType,
+        Guid? locationId,
+        bool? onHandOnly,
+        CancellationToken cancellationToken)
+    {
+        if (locationType is not null && !StockLocation.All.Contains(locationType))
+        {
+            throw new ConflictException("invalid_location_type", $"location_type '{locationType}' is not valid.");
+        }
+
+        var query = _db.InventoryLots
+            .AsNoTracking()
+            .Where(l => l.ProductId == productId);
+
+        if (onHandOnly != false) query = query.Where(l => l.RemainingQty > 0m);
+        if (locationType is not null) query = query.Where(l => l.LocationType == locationType);
+        if (locationId is { } lid) query = query.Where(l => l.LocationId == lid);
+
+        return await query
+            .OrderBy(l => l.ExpirationDate.HasValue ? 0 : 1)    // dated lots before never-expiring
+            .ThenBy(l => l.ExpirationDate)                       // earliest expiry first
+            .ThenBy(l => l.ReceivedAt)                           // then oldest receipt (FIFO)
+            .ThenBy(l => l.Id)                                   // stable final tie-break
+            .Select(l => new InventoryLotResponse(
+                l.Id,
+                l.ProductId,
+                l.LocationType,
+                l.LocationId,
+                l.PurchaseInvoiceItemId,
+                l.UnitCost,
+                l.ExpirationDate,
+                l.LotNumber,
+                l.ReceivedQty,
+                l.RemainingQty,
+                l.ReceivedAt))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// GET /inventory/expiring — on-hand lots whose own expiry falls within the warning window, the
+    /// lot-accurate near-expiry view (dashboard widget + the inventory alerts page). The window
+    /// defaults to <c>system_settings.expiration_warning_days</c> (30 if unset); the optional
+    /// <paramref name="withinDays"/> query param overrides it. This is the env-scoped REST mirror of
+    /// the M11 <see cref="VetSystem.Application.Inventory.IInventoryScanService"/> scan that backs the
+    /// daily <c>expiry_warning</c> notification — one row per lot, ordered soonest-expiring first.
+    /// </summary>
+    public async Task<IReadOnlyList<ExpiringProduct>> ListExpiringAsync(
+        int? withinDays,
+        CancellationToken cancellationToken)
+    {
+        var warningDays = withinDays ?? await ExpirationWarningDaysAsync(cancellationToken);
+        var today = DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime);
+        var cutoff = today.AddDays(warningDays);
+
+        var lots = await _db.InventoryLots
+            .AsNoTracking()
+            .Where(l => l.RemainingQty > 0m
+                        && l.ExpirationDate != null
+                        && l.ExpirationDate <= cutoff)
+            .Join(
+                _db.Products,
+                l => l.ProductId,
+                p => p.Id,
+                (l, p) => new
+                {
+                    l.Id,
+                    l.ProductId,
+                    p.NameAr,
+                    l.LotNumber,
+                    ExpirationDate = l.ExpirationDate!.Value,
+                    l.RemainingQty,
+                })
+            .ToListAsync(cancellationToken);
+
+        if (lots.Count == 0)
+        {
+            return [];
+        }
+
+        var onHand = await _db.StockItems
+            .AsNoTracking()
+            .GroupBy(s => s.ProductId)
+            .Select(g => new { ProductId = g.Key, Quantity = g.Sum(x => x.Quantity) })
+            .ToDictionaryAsync(x => x.ProductId, x => x.Quantity, cancellationToken);
+
+        return lots
+            .Select(l => new ExpiringProduct(
+                l.Id,
+                l.ProductId,
+                l.NameAr,
+                l.LotNumber,
+                l.ExpirationDate,
+                l.ExpirationDate.DayNumber - today.DayNumber,
+                l.RemainingQty,
+                onHand.GetValueOrDefault(l.ProductId)))
+            .OrderBy(e => e.DaysUntilExpiry)
+            .ThenBy(e => e.ProductNameAr)
+            .ToList();
+    }
+
+    /// <summary>
     /// The environment's <c>low_stock_threshold_pct</c> (0 if unset). Read through the global query
     /// filter (current environment), unlike the cross-environment M11 scan.
     /// </summary>
@@ -188,4 +301,14 @@ public sealed class InventoryReadService
             .AsNoTracking()
             .Select(s => (decimal?)s.LowStockThresholdPct)
             .FirstOrDefaultAsync(cancellationToken) ?? 0m;
+
+    /// <summary>
+    /// The environment's <c>expiration_warning_days</c> (30 if unset) — the near-expiry window. Read
+    /// through the global query filter (current environment), unlike the cross-environment M11 scan.
+    /// </summary>
+    private async Task<int> ExpirationWarningDaysAsync(CancellationToken cancellationToken) =>
+        await _db.SystemSettings
+            .AsNoTracking()
+            .Select(s => (int?)s.ExpirationWarningDays)
+            .FirstOrDefaultAsync(cancellationToken) ?? 30;
 }

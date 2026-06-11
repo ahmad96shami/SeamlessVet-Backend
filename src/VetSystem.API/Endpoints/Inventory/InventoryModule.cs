@@ -32,6 +32,14 @@ public sealed class InventoryModule : IEndpointModule
             .WithName("Inventory_FieldInventories")
             .WithSummary("Field doctors' inventories — the load/unload doctor picker.");
 
+        group.MapGet("/lots", ListLots)
+            .WithName("Inventory_Lots")
+            .WithSummary("FEFO lots of a product (cost + expiry + remaining), earliest-expiry first.");
+
+        group.MapGet("/expiring", ListExpiring)
+            .WithName("Inventory_Expiring")
+            .WithSummary("On-hand lots near expiry (lot-accurate near-expiry alert view).");
+
         group.MapPost("/receive", Receive)
             .RequirePermission(PermissionKey.InventoryAdjust)
             .AddEndpointFilter<ValidationFilter<ReceiveStockRequest>>()
@@ -106,6 +114,27 @@ public sealed class InventoryModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var items = await svc.ListFieldInventoriesAsync(cancellationToken);
+        return TypedResults.Ok(items);
+    }
+
+    private static async Task<IResult> ListLots(
+        InventoryReadService svc,
+        Guid productId,
+        string? locationType,
+        Guid? locationId,
+        bool? onHandOnly,
+        CancellationToken cancellationToken)
+    {
+        var items = await svc.ListLotsAsync(productId, locationType, locationId, onHandOnly, cancellationToken);
+        return TypedResults.Ok(items);
+    }
+
+    private static async Task<IResult> ListExpiring(
+        InventoryReadService svc,
+        int? withinDays,
+        CancellationToken cancellationToken)
+    {
+        var items = await svc.ListExpiringAsync(withinDays, cancellationToken);
         return TypedResults.Ok(items);
     }
 

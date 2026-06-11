@@ -119,6 +119,26 @@ public sealed record FieldInventoryResponse(
     Guid DoctorId,
     string DoctorName);
 
+/// <summary>
+/// M25 — one FEFO lot of a product at a location (GET /inventory/lots), the web's lot-detail view.
+/// Carries the batch's <see cref="UnitCost"/> + <see cref="ExpirationDate"/>;
+/// <see cref="RemainingQty"/> is the materialized remainder, and per (location, product)
+/// <c>Σ remaining_qty == stock_items.quantity</c>. Returned in FEFO order (earliest-expiry first,
+/// never-expiring last) — the same order consumption draws them.
+/// </summary>
+public sealed record InventoryLotResponse(
+    Guid Id,
+    Guid ProductId,
+    string LocationType,
+    Guid LocationId,
+    Guid? PurchaseInvoiceItemId,
+    decimal UnitCost,
+    DateOnly? ExpirationDate,
+    string? LotNumber,
+    decimal ReceivedQty,
+    decimal RemainingQty,
+    DateTimeOffset ReceivedAt);
+
 // ---- Dedicated /inventory/* endpoint requests (Admin / Inventory staff; online-preferred) ----
 
 /// <summary>
