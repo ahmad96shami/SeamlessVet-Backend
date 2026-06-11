@@ -179,6 +179,12 @@ builder.Services.AddScoped<VetSystem.API.Suppliers.SuppliersService>();
 builder.Services.AddScoped<VetSystem.API.Suppliers.PurchaseInvoicesService>();
 builder.Services.AddScoped<VetSystem.API.Suppliers.SupplierPaymentsService>();
 
+// M30 — doctor-partners (entitlement-earning field doctors) + their AP ledger.
+builder.Services.AddScoped<VetSystem.Application.DoctorPartnerLedgers.IDoctorPartnerLedgerService,
+    VetSystem.Infrastructure.DoctorPartnerLedgers.DoctorPartnerLedgerService>();
+builder.Services.AddScoped<VetSystem.API.DoctorPartners.DoctorPartnersService>();
+builder.Services.AddScoped<VetSystem.API.DoctorPartners.DoctorPartnerPaymentsService>();
+
 // M8 — contracts & batches (lifecycle, per-medication pricing, supervision cycles)
 builder.Services.AddScoped<VetSystem.Application.Contracts.IContractLifecycleService,
     VetSystem.Infrastructure.Contracts.ContractLifecycleService>();

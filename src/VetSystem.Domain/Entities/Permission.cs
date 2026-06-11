@@ -58,6 +58,10 @@ public static class PermissionKey
     // Suppliers, purchase invoices & supplier payments (M19)
     public const string SuppliersWrite = "suppliers.write";
 
+    // Doctor-partners & their entitlement-payable ledger (M30)
+    public const string DoctorPartnersManage = "doctor_partners.manage";
+    public const string DoctorPartnersPay = "doctor_partners.pay";
+
     public static readonly IReadOnlyCollection<string> All =
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
@@ -72,5 +76,6 @@ public static class PermissionKey
         PartnershipManage,
         ReportsRead,
         SuppliersWrite,
+        DoctorPartnersManage, DoctorPartnersPay,
     ];
 }

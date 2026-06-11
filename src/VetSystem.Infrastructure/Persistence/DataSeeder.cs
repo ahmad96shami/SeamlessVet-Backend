@@ -608,6 +608,10 @@ public sealed class DataSeeder
         await _db.Database.ExecuteSqlRawAsync(
             """
             TRUNCATE TABLE
+              doctor_partner_ledger_entries,
+              doctor_partner_payments,
+              doctor_partner_ledgers,
+              doctor_partners,
               doctor_entitlements,
               supplier_ledger_entries,
               supplier_payments,
@@ -671,6 +675,9 @@ public sealed class DataSeeder
                 PermissionKey.EntitlementsApprove,
                 // M19: the accountant manages suppliers, records purchase invoices, and pays suppliers.
                 PermissionKey.SuppliersWrite,
+                // M30: the accountant manages doctor-partners and pays their entitlement balances.
+                PermissionKey.DoctorPartnersManage,
+                PermissionKey.DoctorPartnersPay,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -725,6 +732,8 @@ public sealed class DataSeeder
         PermissionKey.PartnershipManage => "Manage partners and partnership profit shares (partnership environments only).",
         PermissionKey.ReportsRead => "View operational and financial reports.",
         PermissionKey.SuppliersWrite => "Manage suppliers, record purchase invoices, and pay suppliers.",
+        PermissionKey.DoctorPartnersManage => "Manage doctor-partners (entitlement payees) and view their balances.",
+        PermissionKey.DoctorPartnersPay => "Pay doctor-partners against their entitlement balances.",
         _ => key,
     };
 }
