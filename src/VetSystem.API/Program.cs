@@ -143,6 +143,7 @@ builder.Services.AddScoped<VetSystem.Application.Inventory.IInventoryScanService
     VetSystem.Infrastructure.Inventory.InventoryScanService>();
 builder.Services.AddScoped<VetSystem.API.Inventory.InventoryAdminService>();
 builder.Services.AddScoped<VetSystem.API.Inventory.InventoryReadService>();
+builder.Services.AddScoped<VetSystem.API.Doctors.DoctorsReadService>();
 
 // M5 — visits & medical records
 builder.Services.AddScoped<VetSystem.Application.Visits.IVisitNumberValidator,
