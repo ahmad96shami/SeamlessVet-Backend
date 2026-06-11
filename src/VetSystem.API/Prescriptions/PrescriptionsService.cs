@@ -150,7 +150,7 @@ public sealed class PrescriptionsService
         _db.Prescriptions.Add(rx);
         await _db.SaveChangesAsync(cancellationToken); // assigns rx.Id for the movement key below
 
-        await _inventory.ApplyMovementAsync(
+        var movement = await _inventory.ApplyMovementAsync(
             new MovementIntent(
                 Id: null,
                 MovementType: MovementType.SaleDeduct,
@@ -164,6 +164,11 @@ public sealed class PrescriptionsService
                 Reason: "administered_in_clinic",
                 VisitId: visit.Id),
             cancellationToken);
+
+        // M25 — capture the FEFO cost of the deducted lots so a billable in-clinic med (M23) snapshots
+        // it as COGS at issuance (stock has already moved, so issuance won't re-resolve it).
+        rx.ResolvedUnitCost = Money(movement.ResolvedUnitCost);
+        await _db.SaveChangesAsync(cancellationToken);
 
         await tx.CommitAsync(cancellationToken);
     }
@@ -254,4 +259,6 @@ public sealed class PrescriptionsService
 
         return (StockLocation.Warehouse, wid);
     }
+
+    private static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 }

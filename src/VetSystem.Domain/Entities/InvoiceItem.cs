@@ -4,8 +4,9 @@ namespace VetSystem.Domain.Entities;
 
 /// <summary>
 /// SCHEMA §8 — one invoice line, referencing a product <b>or</b> a service (typed pair + CHECK).
-/// <see cref="CostPrice"/> is snapshotted from <c>products.purchase_price</c> at sale time and never
-/// recomputed (SCHEMA "Key invariants" #8); it feeds the M9 batch drug-profit calc. The optional
+/// <see cref="CostPrice"/> is snapshotted at sale time from the FEFO weighted-average cost of the
+/// lots the sale consumed (M25) and never recomputed (SCHEMA "Key invariants" #8); it feeds the M9
+/// batch drug-profit calc. The optional
 /// <see cref="PrescriptionId"/> / <see cref="ProcedureId"/> / <see cref="VaccinationId"/> /
 /// <see cref="NightStayId"/> / <see cref="CheckupFeeVisitId"/> back-links record that this line
 /// bills a specific visit charge — a billable prescription, a procedure, a catalog-linked
@@ -26,7 +27,8 @@ public sealed class InvoiceItem : Entity
 
     public decimal UnitPrice { get; set; }
 
-    /// <summary>Snapshot of <c>products.purchase_price</c> at sale time; 0 for service lines.</summary>
+    /// <summary>FEFO weighted-average cost of the lots the sale consumed, snapshotted at sale time
+    /// (M25); 0 for service lines.</summary>
     public decimal CostPrice { get; set; }
 
     public decimal DiscountAmount { get; set; }

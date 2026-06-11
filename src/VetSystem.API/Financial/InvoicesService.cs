@@ -18,8 +18,9 @@ namespace VetSystem.API.Financial;
 /// Invoice issuance + reads (M7 tasks 3–8, 12). All three issuance flows (POS, field, exam-fee)
 /// funnel through one transactional core so the append-only invariants hold uniformly: an issued
 /// invoice, its items + payments, the <c>sale_deduct</c> movements for product lines, and the
-/// customer ledger posting all commit together or not at all. <c>cost_price</c> is snapshotted from
-/// the product at sale time (SCHEMA invariant #8); a walk-in (null customer) skips the ledger
+/// customer ledger posting all commit together or not at all. <c>cost_price</c> is snapshotted at
+/// sale time from the FEFO weighted-average cost of the lots the sale consumed (M25; SCHEMA
+/// invariant #8) and never recomputed; a walk-in (null customer) skips the ledger
 /// (PRD §5.4); the ledger entry records the credit/outstanding portion (total minus non-credit
 /// payments). When an invoice is tied to a visit, that visit's unbilled dispensed meds and
 /// procedures are auto-assembled as lines (task 8).
@@ -533,23 +534,31 @@ public sealed class InvoicesService
 
         // M23 — a billable administered_in_clinic prescription already deducted its stock at
         // recording (movement key rx-{id}); deducting its invoice line again would double-count.
+        // M25 — its COGS is the FEFO cost captured at administration (prescriptions.resolved_unit_cost),
+        // so we snapshot that here rather than re-resolving.
         var backLinkedRxIds = productItems
             .Where(it => it.PrescriptionId != null).Select(it => it.PrescriptionId!.Value).ToList();
-        HashSet<Guid> administeredRx = backLinkedRxIds.Count == 0
-            ? []
-            : (await _db.Prescriptions.AsNoTracking()
+        var administeredRxCost = backLinkedRxIds.Count == 0
+            ? new Dictionary<Guid, decimal?>()
+            : await _db.Prescriptions.AsNoTracking()
                 .Where(p => backLinkedRxIds.Contains(p.Id) && p.DispenseType == DispenseType.AdministeredInClinic)
-                .Select(p => p.Id)
-                .ToListAsync(cancellationToken)).ToHashSet();
+                .ToDictionaryAsync(p => p.Id, p => p.ResolvedUnitCost, cancellationToken);
 
         foreach (var item in productItems)
         {
-            if (item.PrescriptionId is { } linkedRx && administeredRx.Contains(linkedRx))
+            if (item.PrescriptionId is { } linkedRx && administeredRxCost.TryGetValue(linkedRx, out var inClinicCost))
             {
-                continue; // stock moved when the med was administered
+                // Stock moved when the med was administered; snapshot the lot's FEFO cost it captured
+                // (null only for legacy rows recorded before M25 — keep the catalog-price fallback).
+                if (inClinicCost is { } captured)
+                {
+                    item.CostPrice = captured;
+                }
+
+                continue;
             }
 
-            await _inventory.ApplyMovementAsync(
+            var movement = await _inventory.ApplyMovementAsync(
                 new MovementIntent(
                     Id: null,
                     MovementType: MovementType.SaleDeduct,
@@ -564,7 +573,14 @@ public sealed class InvoicesService
                     VisitId: invoice.VisitId,
                     InvoiceId: invoice.Id),
                 cancellationToken);
+
+            // M25 — snapshot the FEFO weighted-average cost of the lots this sale consumed as COGS
+            // (SCHEMA invariant #8); the line was built with the catalog price as a placeholder.
+            item.CostPrice = Money(movement.ResolvedUnitCost);
         }
+
+        // Persist the FEFO cost_price snapshots written onto the (tracked) product lines above.
+        await _db.SaveChangesAsync(cancellationToken);
 
         // Ledger: an invoice posts its outstanding (credit) portion to its owner ledger — the farm
         // ledger for a farm-scoped invoice, else the customer ledger; a walk-in (no owner) posts nothing.
@@ -883,7 +899,9 @@ public sealed class InvoicesService
             // contract-overridden price (M8) and everything else falls back to the catalog price.
             unitPrice = item.UnitPrice
                 ?? await ResolveProductUnitPriceAsync(productId, product.SellingPrice, customerId, pricingAsOf, applyContractPricing, cancellationToken);
-            costPrice = product.PurchasePrice; // snapshot — never recomputed (SCHEMA invariant #8)
+            // M25 — placeholder; the issuance deduction loop overwrites this with the FEFO cost of the
+            // lots the sale consumes (an already-administered in-clinic med keeps its captured cost).
+            costPrice = product.PurchasePrice;
             description ??= product.NameAr;
         }
         else
@@ -971,7 +989,7 @@ public sealed class InvoicesService
                     Description: product.NameAr,
                     Quantity: quantity,
                     UnitPrice: unitPrice,
-                    CostPrice: product.PurchasePrice,
+                    CostPrice: product.PurchasePrice, // M25 placeholder — FEFO cost snapshotted at deduction
                     DiscountAmount: 0m,
                     LineTotal: Money(quantity * unitPrice),
                     PrescriptionId: rx.Id,
