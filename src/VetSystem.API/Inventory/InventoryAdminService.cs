@@ -40,7 +40,11 @@ public sealed class InventoryAdminService
                 ToLocationType: StockLocation.Warehouse,
                 ToLocationId: warehouseId,
                 IdempotencyKey: request.IdempotencyKey,
-                Reason: request.Reason),
+                Reason: request.Reason,
+                // M25 — seed the created lot's cost + expiry (cost falls back to catalog purchase price).
+                UnitCost: request.UnitCost,
+                ExpirationDate: request.ExpirationDate,
+                LotNumber: request.LotNumber),
             cancellationToken);
     }
 

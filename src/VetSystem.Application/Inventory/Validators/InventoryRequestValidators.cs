@@ -12,6 +12,8 @@ public sealed class ReceiveStockRequestValidator : AbstractValidator<ReceiveStoc
         RuleFor(r => r.Quantity).GreaterThan(0m).WithMessage("Quantity must be greater than zero.");
         RuleFor(r => r.IdempotencyKey).NotEmpty().MaximumLength(128);
         RuleFor(r => r.Reason).MaximumLength(512);
+        RuleFor(r => r.UnitCost!.Value).GreaterThanOrEqualTo(0m).When(r => r.UnitCost.HasValue);
+        RuleFor(r => r.LotNumber).MaximumLength(64);
     }
 }
 

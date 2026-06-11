@@ -11,6 +11,7 @@ internal sealed class PurchaseInvoiceLineRequestValidator : AbstractValidator<Pu
         RuleFor(l => l.Quantity).GreaterThan(0m);
         RuleFor(l => l.UnitCost).GreaterThanOrEqualTo(0m);
         RuleFor(l => l.DiscountAmount).GreaterThanOrEqualTo(0m);
+        RuleFor(l => l.LotNumber).MaximumLength(64);
     }
 }
 

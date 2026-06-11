@@ -2,13 +2,17 @@ namespace VetSystem.Application.Purchasing.Contracts;
 
 /// <summary>
 /// One line of a purchase invoice (M19, SCHEMA §4). Always a product. <c>UnitCost</c> is the per-unit
-/// cost the clinic paid the supplier and is snapshotted on the line at receipt.
+/// cost the clinic paid the supplier and is snapshotted on the line at receipt. M25 — the optional
+/// <c>ExpirationDate</c> + <c>LotNumber</c> ride onto the <c>inventory_lot</c> the receive creates,
+/// so this line's goods consume FEFO at their own cost + expiry.
 /// </summary>
 public sealed record PurchaseInvoiceLineRequest(
     Guid ProductId,
     decimal Quantity,
     decimal UnitCost,
-    decimal DiscountAmount = 0m);
+    decimal DiscountAmount = 0m,
+    DateOnly? ExpirationDate = null,
+    string? LotNumber = null);
 
 /// <summary>
 /// Purchase-invoice issuance (M19 task 5). One transaction (a) writes a signed <c>receive</c> movement
@@ -35,7 +39,8 @@ public sealed record PurchaseInvoiceItemResponse(
     decimal Quantity,
     decimal UnitCost,
     decimal DiscountAmount,
-    decimal LineTotal);
+    decimal LineTotal,
+    DateOnly? ExpirationDate);
 
 public sealed record PurchaseInvoiceResponse(
     Guid Id,

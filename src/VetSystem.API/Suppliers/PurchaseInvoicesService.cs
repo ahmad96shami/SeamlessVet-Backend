@@ -97,7 +97,9 @@ public sealed class PurchaseInvoicesService
                     "A line discount cannot exceed the line's gross cost.");
             }
 
-            lines.Add(new ResolvedLine(item.ProductId, item.Quantity, Money(item.UnitCost), Money(item.DiscountAmount), lineTotal));
+            lines.Add(new ResolvedLine(
+                item.ProductId, item.Quantity, Money(item.UnitCost), Money(item.DiscountAmount), lineTotal,
+                item.ExpirationDate, string.IsNullOrWhiteSpace(item.LotNumber) ? null : item.LotNumber.Trim()));
         }
 
         var subtotal = Money(lines.Sum(l => l.LineTotal));
@@ -132,9 +134,12 @@ public sealed class PurchaseInvoicesService
         _db.PurchaseInvoices.Add(invoice);
         await _db.SaveChangesAsync(cancellationToken); // assigns invoice.Id
 
+        // Keep each created item paired with its resolved line so the receive below carries the
+        // line's lot number onto the lot (the line's expiry is persisted on the item itself).
+        var createdItems = new List<(PurchaseInvoiceItem Item, ResolvedLine Line)>(lines.Count);
         foreach (var line in lines)
         {
-            _db.PurchaseInvoiceItems.Add(new PurchaseInvoiceItem
+            var entity = new PurchaseInvoiceItem
             {
                 Id = Guid.Empty,
                 PurchaseInvoiceId = invoice.Id,
@@ -143,17 +148,18 @@ public sealed class PurchaseInvoicesService
                 UnitCost = line.UnitCost,
                 DiscountAmount = line.DiscountAmount,
                 LineTotal = line.LineTotal,
-            });
+                ExpirationDate = line.ExpirationDate,
+            };
+            _db.PurchaseInvoiceItems.Add(entity);
+            createdItems.Add((entity, line));
         }
 
-        await _db.SaveChangesAsync(cancellationToken); // assigns item ids (used as movement keys)
+        await _db.SaveChangesAsync(cancellationToken); // assigns item ids (used as movement keys + lot source)
 
         // Receive each line into the warehouse — delta-only signed movements, tagged with the source
         // purchase invoice. Per-item idempotency key keeps a retried issuance from double-receiving.
-        var items = await _db.PurchaseInvoiceItems
-            .Where(it => it.PurchaseInvoiceId == invoice.Id)
-            .ToListAsync(cancellationToken);
-        foreach (var item in items)
+        // M25 — each receive seeds an inventory_lot at the line's cost + expiry + lot number.
+        foreach (var (item, line) in createdItems)
         {
             await _inventory.ApplyMovementAsync(
                 new MovementIntent(
@@ -169,7 +175,11 @@ public sealed class PurchaseInvoicesService
                     Reason: invoice.Number is null ? "Purchase invoice" : $"Purchase invoice {invoice.Number}",
                     VisitId: null,
                     InvoiceId: null,
-                    PurchaseInvoiceId: invoice.Id),
+                    PurchaseInvoiceId: invoice.Id,
+                    UnitCost: item.UnitCost,
+                    ExpirationDate: item.ExpirationDate,
+                    LotNumber: line.LotNumber,
+                    PurchaseInvoiceItemId: item.Id),
                 cancellationToken);
         }
 
@@ -289,5 +299,6 @@ public sealed class PurchaseInvoicesService
     private static decimal Money(decimal value) => Math.Round(value, 2, MidpointRounding.AwayFromZero);
 
     private sealed record ResolvedLine(
-        Guid ProductId, decimal Quantity, decimal UnitCost, decimal DiscountAmount, decimal LineTotal);
+        Guid ProductId, decimal Quantity, decimal UnitCost, decimal DiscountAmount, decimal LineTotal,
+        DateOnly? ExpirationDate, string? LotNumber);
 }
