@@ -78,6 +78,12 @@ public sealed class ApplicationDbContext : DbContext
 
     public DbSet<DoctorEntitlement> DoctorEntitlements => Set<DoctorEntitlement>();
 
+    // M30 — doctor-partners + their AP ledger (entitlement payee, distinct from the M10 investor Partner).
+    public DbSet<DoctorPartner> DoctorPartners => Set<DoctorPartner>();
+    public DbSet<DoctorPartnerLedger> DoctorPartnerLedgers => Set<DoctorPartnerLedger>();
+    public DbSet<DoctorPartnerLedgerEntry> DoctorPartnerLedgerEntries => Set<DoctorPartnerLedgerEntry>();
+    public DbSet<DoctorPartnerPayment> DoctorPartnerPayments => Set<DoctorPartnerPayment>();
+
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 
