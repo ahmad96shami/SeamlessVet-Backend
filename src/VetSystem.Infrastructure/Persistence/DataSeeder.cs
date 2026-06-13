@@ -100,7 +100,9 @@ public sealed class DataSeeder
         {
             Id = BootstrapEnvironmentId,
             Name = "Bootstrap",
+            Code = "BOOTSTRAP",
             Mode = EnvironmentMode.Solo,
+            Status = EnvironmentStatus.Active,
             CreatedAt = now,
             UpdatedAt = now,
         });

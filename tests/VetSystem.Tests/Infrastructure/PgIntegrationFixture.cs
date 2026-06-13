@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using VetSystem.Application.Common;
+using VetSystem.Domain.Entities;
 using VetSystem.Infrastructure.Persistence;
 using DomainEnvironment = VetSystem.Domain.Entities.Environment;
 
@@ -33,7 +34,10 @@ public sealed class PgTestScope : IAsyncDisposable
         {
             Id = envId,
             Name = $"Test-{envId:N}".Substring(0, 32),
+            // M32 — code is globally unique + non-null; derive a short unique code per scope.
+            Code = $"T{envId:N}".Substring(0, 24).ToUpperInvariant(),
             Mode = mode,
+            Status = EnvironmentStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
