@@ -7,9 +7,11 @@ using VetSystem.Domain.Common;
 namespace VetSystem.API.Endpoints.Auth;
 
 /// <summary>
-/// PRD §3 admin-approval flow: /auth/register creates an inactive user + pending request;
-/// /auth/login refuses anything that isn't <c>users.status = 'active'</c>;
-/// /auth/refresh rotates server-side refresh tokens; /auth/logout revokes.
+/// PRD §3 admin-approval flow + M34 tenant-routed login. <c>/auth/centers</c> lists the centers a
+/// phone belongs to (login picker); <c>/auth/login</c> authenticates against the chosen
+/// <c>environmentId</c>; <c>/auth/center-by-code</c> resolves a center for self-registration;
+/// <c>/auth/refresh</c> / <c>/auth/logout</c> read the env off the stored refresh token.
+/// Anonymous lookups + login are IP-rate-limited ("auth" policy).
 /// /auth/powersync-token (the M0 endpoint) lives in <see cref="PowerSyncTokenEndpoint"/>.
 /// </summary>
 public sealed class AuthModule : IEndpointModule
@@ -18,23 +20,40 @@ public sealed class AuthModule : IEndpointModule
     {
         var group = endpoints.MapGroup("/auth").WithTags("Auth");
 
+        group.MapPost("/centers", Centers)
+            .AddEndpointFilter<ValidationFilter<CentersLookupRequest>>()
+            .AllowAnonymous()
+            .RequireRateLimiting("auth")
+            .WithName("Auth_Centers")
+            .WithSummary("List the active centers a phone number belongs to (login routing).");
+
+        group.MapPost("/center-by-code", CenterByCode)
+            .AddEndpointFilter<ValidationFilter<CenterByCodeRequest>>()
+            .AllowAnonymous()
+            .RequireRateLimiting("auth")
+            .WithName("Auth_CenterByCode")
+            .WithSummary("Resolve an active center by its code (registration routing).");
+
         group.MapPost("/register", Register)
             .AddEndpointFilter<ValidationFilter<RegisterRequest>>()
             .AllowAnonymous()
+            .RequireRateLimiting("auth")
             .WithName("Auth_Register")
-            .WithSummary("Create an inactive account + pending registration request.");
+            .WithSummary("Create an inactive account + pending registration request in the chosen center.");
 
         group.MapPost("/login", Login)
             .AddEndpointFilter<ValidationFilter<LoginRequest>>()
             .AllowAnonymous()
+            .RequireRateLimiting("auth")
             .WithName("Auth_Login")
-            .WithSummary("Exchange phone + password for an access/refresh token pair (active accounts only).");
+            .WithSummary("Exchange center + phone + password for an access/refresh token pair (active accounts only).");
 
         group.MapPost("/refresh", Refresh)
             .AddEndpointFilter<ValidationFilter<RefreshRequest>>()
             .AllowAnonymous()
+            .RequireRateLimiting("auth")
             .WithName("Auth_Refresh")
-            .WithSummary("Rotate a refresh token; revokes the old one.");
+            .WithSummary("Rotate a refresh token; revokes the old one (env read off the token).");
 
         group.MapPost("/logout", Logout)
             .AddEndpointFilter<ValidationFilter<LogoutRequest>>()
@@ -48,47 +67,58 @@ public sealed class AuthModule : IEndpointModule
             .WithSummary("Mint a short-lived JWT for the PowerSync SDK upload/download stream.");
     }
 
+    private static async Task<IResult> Centers(
+        CentersLookupRequest request,
+        AuthService auth,
+        CancellationToken cancellationToken)
+    {
+        var centers = await auth.FindCentersForPhoneAsync(request.Phone, cancellationToken);
+        return TypedResults.Ok(new CentersLookupResponse(centers));
+    }
+
+    private static async Task<IResult> CenterByCode(
+        CenterByCodeRequest request,
+        AuthService auth,
+        CancellationToken cancellationToken)
+    {
+        var center = await auth.FindCenterByCodeAsync(request.Code, cancellationToken)
+            ?? throw new NotFoundException("center", request.Code);
+        return TypedResults.Ok(center);
+    }
+
     private static async Task<IResult> Register(
         RegisterRequest request,
         AuthService auth,
-        IRequestEnvironmentResolver envResolver,
         CancellationToken cancellationToken)
     {
-        var environmentId = envResolver.Resolve();
-        var result = await auth.RegisterAsync(environmentId, request, cancellationToken);
+        var result = await auth.RegisterAsync(request, cancellationToken);
         return TypedResults.Ok(result);
     }
 
     private static async Task<IResult> Login(
         LoginRequest request,
         AuthService auth,
-        IRequestEnvironmentResolver envResolver,
         CancellationToken cancellationToken)
     {
-        var environmentId = envResolver.Resolve();
-        var pair = await auth.LoginAsync(environmentId, request, cancellationToken);
+        var pair = await auth.LoginAsync(request, cancellationToken);
         return TypedResults.Ok(pair);
     }
 
     private static async Task<IResult> Refresh(
         RefreshRequest request,
         AuthService auth,
-        IRequestEnvironmentResolver envResolver,
         CancellationToken cancellationToken)
     {
-        var environmentId = envResolver.Resolve();
-        var pair = await auth.RefreshAsync(environmentId, request.RefreshToken, cancellationToken);
+        var pair = await auth.RefreshAsync(request.RefreshToken, cancellationToken);
         return TypedResults.Ok(pair);
     }
 
     private static async Task<IResult> Logout(
         LogoutRequest request,
         AuthService auth,
-        IRequestEnvironmentResolver envResolver,
         CancellationToken cancellationToken)
     {
-        var environmentId = envResolver.Resolve();
-        await auth.LogoutAsync(environmentId, request.RefreshToken, cancellationToken);
+        await auth.LogoutAsync(request.RefreshToken, cancellationToken);
         return TypedResults.NoContent();
     }
 

@@ -15,9 +15,13 @@ public interface IRefreshTokenStore
         TimeSpan lifetime,
         CancellationToken cancellationToken);
 
-    Task<StoredRefreshToken?> FindActiveAsync(
+    /// <summary>
+    /// Finds an active token by its raw value alone — the deterministic SHA-256 hash is globally
+    /// unique, so the environment is read off the stored row (M34: refresh/logout no longer need the
+    /// caller to know the env; the token self-identifies it).
+    /// </summary>
+    Task<StoredRefreshToken?> FindActiveByTokenAsync(
         string rawToken,
-        Guid environmentId,
         CancellationToken cancellationToken);
 
     Task<StoredRefreshToken> RotateAsync(

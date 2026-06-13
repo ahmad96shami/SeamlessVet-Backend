@@ -99,7 +99,6 @@ builder.Services.Configure<VetSystem.Infrastructure.Storage.R2Options>(
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserAccessor, HttpCurrentUserAccessor>();
-builder.Services.AddScoped<IRequestEnvironmentResolver, RequestEnvironmentResolver>();
 builder.Services.AddSingleton<IPowerSyncTokenService, PowerSyncTokenService>();
 
 // M1 — identity, RBAC, admin approval
@@ -471,6 +470,31 @@ builder.Services.AddRateLimiter(options =>
         });
     });
 
+    // M34 — the anonymous /auth/* lookups + login are an unauthenticated phone/center oracle, so
+    // partition by client IP (no user yet). Same enabled-flag + lazy-config convention as "sync".
+    options.AddPolicy("auth", httpContext =>
+    {
+        var config = httpContext.RequestServices.GetRequiredService<IConfiguration>();
+        var env = httpContext.RequestServices.GetRequiredService<IHostEnvironment>();
+        var enabled = config.GetValue<bool?>("RateLimiting:Enabled") ?? !env.IsEnvironment("Test");
+        if (!enabled)
+        {
+            return RateLimitPartition.GetNoLimiter("disabled");
+        }
+
+        var partitionKey = httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous";
+        var auth = config.GetSection("RateLimiting:Auth");
+        return RateLimitPartition.GetTokenBucketLimiter(partitionKey, _ => new TokenBucketRateLimiterOptions
+        {
+            TokenLimit = auth.GetValue<int?>("TokenLimit") ?? 10,
+            TokensPerPeriod = auth.GetValue<int?>("TokensPerPeriod") ?? 5,
+            ReplenishmentPeriod = TimeSpan.FromSeconds(auth.GetValue<int?>("ReplenishmentPeriodSeconds") ?? 60),
+            QueueLimit = auth.GetValue<int?>("QueueLimit") ?? 0,
+            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+            AutoReplenishment = true,
+        });
+    });
+
     // Match the canonical { code, message } error shape and surface Retry-After to clients.
     options.OnRejected = async (context, cancellationToken) =>
     {
@@ -482,7 +506,7 @@ builder.Services.AddRateLimiter(options =>
 
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new { code = "rate_limited", message = "Too many sync requests; slow down and retry." },
+            new { code = "rate_limited", message = "Too many requests; slow down and retry." },
             cancellationToken);
     };
 });

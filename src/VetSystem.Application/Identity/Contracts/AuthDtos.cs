@@ -1,6 +1,7 @@
 namespace VetSystem.Application.Identity.Contracts;
 
 public sealed record RegisterRequest(
+    Guid EnvironmentId,
     string FullName,
     string PhonePrimary,
     string? Email,
@@ -11,7 +12,22 @@ public sealed record RegisterRequest(
 
 public sealed record RegisterResponse(Guid UserId, Guid RegistrationRequestId);
 
-public sealed record LoginRequest(string PhonePrimary, string Password);
+/// <summary>
+/// M34 — login is tenant-routed: the client first calls <c>/auth/centers</c> with the phone, picks
+/// the center, then logs in with that <see cref="EnvironmentId"/> + phone + password.
+/// </summary>
+public sealed record LoginRequest(Guid EnvironmentId, string PhonePrimary, string Password);
+
+/// <summary>POST /auth/centers — list the centers a phone belongs to (login routing).</summary>
+public sealed record CentersLookupRequest(string Phone);
+
+/// <summary>POST /auth/center-by-code — resolve a center by its human code (registration routing).</summary>
+public sealed record CenterByCodeRequest(string Code);
+
+/// <summary>A center a user may sign into (minimal, no sensitive data).</summary>
+public sealed record CenterOption(Guid EnvironmentId, string Name, string Code);
+
+public sealed record CentersLookupResponse(IReadOnlyList<CenterOption> Centers);
 
 /// <summary>
 /// Token pair returned by /auth/login and /auth/refresh. <see cref="NumberPrefix"/> is the

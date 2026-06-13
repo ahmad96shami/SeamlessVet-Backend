@@ -39,10 +39,12 @@ public sealed class AuthService
     }
 
     public async Task<RegisterResponse> RegisterAsync(
-        Guid environmentId,
         RegisterRequest request,
         CancellationToken cancellationToken)
     {
+        var environmentId = request.EnvironmentId;
+        await EnsureEnvironmentActiveAsync(environmentId, cancellationToken);
+
         if (!RoleKey.All.Contains(request.RequestedRoleKey))
         {
             throw new ConflictException("invalid_role", $"Role '{request.RequestedRoleKey}' is not a valid role key.");
@@ -104,10 +106,10 @@ public sealed class AuthService
     }
 
     public async Task<TokenPair> LoginAsync(
-        Guid environmentId,
         LoginRequest request,
         CancellationToken cancellationToken)
     {
+        var environmentId = request.EnvironmentId;
         var user = await _db.Users
             .IgnoreQueryFilters()
             .Where(u => u.EnvironmentId == environmentId
@@ -120,6 +122,10 @@ public sealed class AuthService
             // Deliberately uniform error: don't leak phone-existence signal.
             throw new ForbiddenException("invalid_credentials", "Phone or password is incorrect.");
         }
+
+        // Reject login into a suspended/deleted center even if the client posts its id directly
+        // (the /auth/centers picker already hides such centers).
+        await EnsureEnvironmentActiveAsync(environmentId, cancellationToken);
 
         if (user.Status == UserStatus.Inactive)
         {
@@ -137,12 +143,14 @@ public sealed class AuthService
     }
 
     public async Task<TokenPair> RefreshAsync(
-        Guid environmentId,
         string rawRefreshToken,
         CancellationToken cancellationToken)
     {
-        var existing = await _refreshStore.FindActiveAsync(rawRefreshToken, environmentId, cancellationToken)
+        // M34 — the env is read off the stored token, not supplied by the caller.
+        var existing = await _refreshStore.FindActiveByTokenAsync(rawRefreshToken, cancellationToken)
                        ?? throw new ForbiddenException("invalid_refresh_token", "Refresh token is invalid or expired.");
+
+        var environmentId = existing.EnvironmentId;
 
         var user = await _db.Users
             .IgnoreQueryFilters()
@@ -157,6 +165,13 @@ public sealed class AuthService
         {
             await _refreshStore.RevokeAsync(existing, "user_not_active", cancellationToken);
             throw new ForbiddenException("account_not_active", "Account is not active.");
+        }
+
+        // A suspended center also kills refresh, so it can't outlive suspension by 30 days.
+        if (!await IsEnvironmentActiveAsync(environmentId, cancellationToken))
+        {
+            await _refreshStore.RevokeAsync(existing, "environment_suspended", cancellationToken);
+            throw new ForbiddenException("environment_suspended", "This center is suspended.");
         }
 
         var roleKey = await GetRoleKeyAsync(user.RoleId, cancellationToken);
@@ -181,9 +196,9 @@ public sealed class AuthService
             user.NumberPrefix);
     }
 
-    public async Task LogoutAsync(Guid environmentId, string rawRefreshToken, CancellationToken cancellationToken)
+    public async Task LogoutAsync(string rawRefreshToken, CancellationToken cancellationToken)
     {
-        var existing = await _refreshStore.FindActiveAsync(rawRefreshToken, environmentId, cancellationToken);
+        var existing = await _refreshStore.FindActiveByTokenAsync(rawRefreshToken, cancellationToken);
         if (existing is null)
         {
             return; // logout is best-effort; an unknown/expired token is a no-op.
@@ -191,6 +206,57 @@ public sealed class AuthService
 
         await _refreshStore.RevokeAsync(existing, "logout", cancellationToken);
     }
+
+    /// <summary>
+    /// Lists the ACTIVE centers an ACTIVE user with this phone belongs to — the login-routing
+    /// picker. Anonymous + IP-rate-limited; the phone-existence exposure is accepted (the chosen
+    /// phone-lookup UX) and uniform (always 200, empty list when none).
+    /// </summary>
+    public async Task<IReadOnlyList<CenterOption>> FindCentersForPhoneAsync(
+        string phone,
+        CancellationToken cancellationToken)
+    {
+        var trimmed = phone.Trim();
+        return await _db.Users
+            .IgnoreQueryFilters()
+            .Where(u => u.PhonePrimary == trimmed && u.Status == UserStatus.Active && u.DeletedAt == null)
+            .Join(
+                _db.Environments.IgnoreQueryFilters()
+                    .Where(e => e.Status == EnvironmentStatus.Active && e.DeletedAt == null),
+                u => u.EnvironmentId,
+                e => e.Id,
+                (_, e) => new CenterOption(e.Id, e.Name, e.Code))
+            .Distinct()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>Resolves an ACTIVE center by its human code — the registration-routing picker.</summary>
+    public async Task<CenterOption?> FindCenterByCodeAsync(string code, CancellationToken cancellationToken)
+    {
+        var trimmed = code.Trim();
+        return await _db.Environments
+            .IgnoreQueryFilters()
+            .Where(e => e.Code == trimmed && e.Status == EnvironmentStatus.Active && e.DeletedAt == null)
+            .Select(e => new CenterOption(e.Id, e.Name, e.Code))
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    private async Task EnsureEnvironmentActiveAsync(Guid environmentId, CancellationToken cancellationToken)
+    {
+        if (!await IsEnvironmentActiveAsync(environmentId, cancellationToken))
+        {
+            throw new ForbiddenException(
+                "environment_suspended",
+                "This center is suspended. Contact the platform administrator.");
+        }
+    }
+
+    private Task<bool> IsEnvironmentActiveAsync(Guid environmentId, CancellationToken cancellationToken)
+        => _db.Environments
+            .IgnoreQueryFilters()
+            .AnyAsync(
+                e => e.Id == environmentId && e.Status == EnvironmentStatus.Active && e.DeletedAt == null,
+                cancellationToken);
 
     private async Task<TokenPair> IssueTokenPairAsync(User user, CancellationToken cancellationToken)
     {

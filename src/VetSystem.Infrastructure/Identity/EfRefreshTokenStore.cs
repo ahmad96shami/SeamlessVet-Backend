@@ -39,21 +39,19 @@ public sealed class EfRefreshTokenStore : IRefreshTokenStore
         return ToStored(entity);
     }
 
-    public async Task<StoredRefreshToken?> FindActiveAsync(
+    public async Task<StoredRefreshToken?> FindActiveByTokenAsync(
         string rawToken,
-        Guid environmentId,
         CancellationToken cancellationToken)
     {
-        // Deterministic SHA-256 → exact match via ix_refresh_tokens_hash. The previous BCrypt
-        // scan verified every active row in the env (~300ms each), so a single failed refresh
-        // hung for minutes once a few hundred logins accumulated.
+        // Deterministic SHA-256 → exact match via the unique ix_refresh_tokens_hash. The hash is
+        // globally unique by construction, so we match by hash alone and read the environment off the
+        // row (M34: refresh/logout no longer thread the env through — the token self-identifies it).
         var now = _clock.UtcNow;
         var hash = _hasher.Hash(rawToken);
         var match = await _db.RefreshTokens
             .IgnoreQueryFilters()
             .FirstOrDefaultAsync(
                 t => t.TokenHash == hash
-                     && t.EnvironmentId == environmentId
                      && t.RevokedAt == null
                      && t.ExpiresAt > now
                      && t.DeletedAt == null,
