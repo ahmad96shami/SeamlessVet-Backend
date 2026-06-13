@@ -24,7 +24,11 @@ internal sealed class RefreshTokenConfiguration : IEntityTypeConfiguration<Refre
         builder.HasIndex(t => new { t.UserId, t.ExpiresAt })
             .HasDatabaseName("ix_refresh_tokens_user_expires");
 
+        // M34 — refresh/logout look up by hash alone (env read off the row), so the hash must be
+        // provably unique. The deterministic SHA-256 of a 256-bit random token is unique by
+        // construction; the unique index makes that a hard guarantee.
         builder.HasIndex(t => t.TokenHash)
-            .HasDatabaseName("ix_refresh_tokens_hash");
+            .HasDatabaseName("ix_refresh_tokens_hash")
+            .IsUnique();
     }
 }
