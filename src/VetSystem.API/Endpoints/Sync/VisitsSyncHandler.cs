@@ -73,6 +73,22 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
             await EnsureFarmBelongsToCustomerAsync(fid, customerId, cancellationToken);
         }
 
+        // Mo11 — a field visit may fall under a supervision batch (Dawra) and/or an active contract;
+        // the device links them at creation. These drive the exam-fee-covered-by-batch guard (M28/M30),
+        // field-invoice batch attribution, and settlement — so persist them (validating existence)
+        // rather than silently drop them.
+        var batchId = SyncBody.OptionalGuid(body, "batch_id");
+        if (batchId is { } bid)
+        {
+            await EnsureExistsAsync(_db.Batches.AnyAsync(b => b.Id == bid, cancellationToken), "batch", bid);
+        }
+
+        var contractId = SyncBody.OptionalGuid(body, "contract_id");
+        if (contractId is { } cid)
+        {
+            await EnsureExistsAsync(_db.Contracts.AnyAsync(c => c.Id == cid, cancellationToken), "contract", cid);
+        }
+
         var visitNumber = SyncBody.OptionalString(body, "visit_number");
         if (!string.IsNullOrWhiteSpace(visitNumber))
         {
@@ -104,6 +120,8 @@ public sealed class VisitsSyncHandler : ISyncTableHandler
             CustomerId = customerId,
             FarmId = farmId,
             PetId = petId,
+            BatchId = batchId,
+            ContractId = contractId,
             DoctorId = doctorId,
             ReceptionistId = SyncBody.OptionalGuid(body, "receptionist_id"),
             Status = status,
