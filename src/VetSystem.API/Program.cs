@@ -111,6 +111,9 @@ builder.Services.AddScoped<IPermissionResolver, VetSystem.Infrastructure.Identit
 // M32 — tenant lifecycle: cached env-status lookup behind the live-suspension middleware.
 builder.Services.AddScoped<VetSystem.Application.Identity.IEnvironmentStatusProvider,
     VetSystem.Infrastructure.Identity.EnvironmentStatusProvider>();
+// M33 — reusable environment provisioning (shared by DataSeeder bootstrap + the platform console).
+builder.Services.AddScoped<VetSystem.Application.Provisioning.IEnvironmentProvisioningService,
+    VetSystem.Infrastructure.Provisioning.EnvironmentProvisioningService>();
 builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator,
     VetSystem.Infrastructure.Identity.NumberPrefixGenerator>();
 builder.Services.AddScoped<AuthService>();
