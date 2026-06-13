@@ -108,6 +108,9 @@ builder.Services.AddSingleton<IRefreshTokenHasher, VetSystem.Infrastructure.Iden
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRefreshTokenStore, VetSystem.Infrastructure.Identity.EfRefreshTokenStore>();
 builder.Services.AddScoped<IPermissionResolver, VetSystem.Infrastructure.Identity.PermissionResolver>();
+// M32 — tenant lifecycle: cached env-status lookup behind the live-suspension middleware.
+builder.Services.AddScoped<VetSystem.Application.Identity.IEnvironmentStatusProvider,
+    VetSystem.Infrastructure.Identity.EnvironmentStatusProvider>();
 builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator,
     VetSystem.Infrastructure.Identity.NumberPrefixGenerator>();
 builder.Services.AddScoped<AuthService>();
@@ -491,6 +494,10 @@ app.UseCors("web");
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// M32 — live tenant suspension. After auth so the principal (and environment_id claim) is resolved;
+// rejects tenant requests whose environment is suspended/deleted, bypassing platform + infra paths.
+app.UseMiddleware<EnvironmentStatusMiddleware>();
 
 // After auth so the rate-limiter partition can read the authenticated user (M13 task 10). The "sync"
 // policy is a no-op limiter unless enabled, so this is safe to run in every environment.
