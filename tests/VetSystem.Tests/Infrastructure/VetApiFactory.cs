@@ -66,6 +66,9 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
     public bool EnableRateLimiting { get; init; }
     public int SyncTokenLimit { get; init; } = 3;
 
+    /// <summary>Bucket size for the M34 anonymous "auth" limiter when <see cref="EnableRateLimiting"/>.</summary>
+    public int AuthTokenLimit { get; init; } = 3;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Test");
@@ -95,6 +98,9 @@ public sealed class VetApiFactory : WebApplicationFactory<Program>
                 overrides["RateLimiting:Sync:TokensPerPeriod"] = "1";
                 // Long window so no tokens replenish mid-burst — the assertion stays deterministic.
                 overrides["RateLimiting:Sync:ReplenishmentPeriodSeconds"] = "120";
+                overrides["RateLimiting:Auth:TokenLimit"] = AuthTokenLimit.ToString();
+                overrides["RateLimiting:Auth:TokensPerPeriod"] = "1";
+                overrides["RateLimiting:Auth:ReplenishmentPeriodSeconds"] = "120";
             }
 
             cfg.AddInMemoryCollection(overrides);

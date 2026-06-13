@@ -53,8 +53,8 @@ public sealed class AuthLifecycleIntegrationTests
             jwtOptions);
 
         var registered = await anonAuth.RegisterAsync(
-            scope.EnvironmentId,
             new RegisterRequest(
+                scope.EnvironmentId,
                 "Field Vet",
                 "+970555111222",
                 "vet@test.local",
@@ -69,8 +69,7 @@ public sealed class AuthLifecycleIntegrationTests
 
         // --- Login while inactive must fail with account_inactive ---
         Func<Task> inactiveLogin = () => anonAuth.LoginAsync(
-            scope.EnvironmentId,
-            new LoginRequest("+970555111222", "Vet_pw_123!"),
+            new LoginRequest(scope.EnvironmentId, "+970555111222", "Vet_pw_123!"),
             CancellationToken.None);
 
         (await inactiveLogin.Should().ThrowAsync<ForbiddenException>())
@@ -107,8 +106,7 @@ public sealed class AuthLifecycleIntegrationTests
             jwtOptions);
 
         var pair = await userAuth.LoginAsync(
-            scope.EnvironmentId,
-            new LoginRequest("+970555111222", "Vet_pw_123!"),
+            new LoginRequest(scope.EnvironmentId, "+970555111222", "Vet_pw_123!"),
             CancellationToken.None);
 
         pair.AccessToken.Should().NotBeNullOrEmpty();
@@ -117,7 +115,6 @@ public sealed class AuthLifecycleIntegrationTests
 
         // --- Refresh rotates the token ---
         var rotated = await userAuth.RefreshAsync(
-            scope.EnvironmentId,
             pair.RefreshToken,
             CancellationToken.None);
 
@@ -126,17 +123,15 @@ public sealed class AuthLifecycleIntegrationTests
 
         // --- Old refresh token is now invalid ---
         Func<Task> replay = () => userAuth.RefreshAsync(
-            scope.EnvironmentId,
             pair.RefreshToken,
             CancellationToken.None);
         (await replay.Should().ThrowAsync<ForbiddenException>())
             .Which.Code.Should().Be("invalid_refresh_token");
 
         // --- Logout revokes the new refresh token ---
-        await userAuth.LogoutAsync(scope.EnvironmentId, rotated.RefreshToken, CancellationToken.None);
+        await userAuth.LogoutAsync(rotated.RefreshToken, CancellationToken.None);
 
         Func<Task> postLogout = () => userAuth.RefreshAsync(
-            scope.EnvironmentId,
             rotated.RefreshToken,
             CancellationToken.None);
         (await postLogout.Should().ThrowAsync<ForbiddenException>())
@@ -202,8 +197,7 @@ public sealed class AuthLifecycleIntegrationTests
             jwtOptions);
 
         var pair = await auth.LoginAsync(
-            scope.EnvironmentId,
-            new LoginRequest("+970555333444", "Cashier_pw_1!"),
+            new LoginRequest(scope.EnvironmentId, "+970555333444", "Cashier_pw_1!"),
             CancellationToken.None);
         pair.RoleKey.Should().Be(RoleKey.Cashier);
 
