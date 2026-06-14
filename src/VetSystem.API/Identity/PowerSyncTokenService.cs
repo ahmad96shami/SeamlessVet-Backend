@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using VetSystem.Application.Common;
@@ -36,7 +37,7 @@ public sealed class PowerSyncTokenService : IPowerSyncTokenService, IDisposable
         _publicJwk = BuildPublicJwk(_rsa, _kid);
     }
 
-    public PowerSyncTokenResult IssueToken(Guid userId)
+    public PowerSyncTokenResult IssueToken(Guid userId, Guid environmentId)
     {
         var now = _clock.UtcNow;
         var expires = now.AddMinutes(_options.TokenLifetimeMinutes);
@@ -51,6 +52,20 @@ public sealed class PowerSyncTokenService : IPowerSyncTokenService, IDisposable
             [
                 new Claim(JwtRegisteredClaimNames.Sub, userId.ToString()),
                 new Claim("user_id", userId.ToString()),
+                // M36 — the tenant key, so Sync Rules can scope every stream to one environment and
+                // close the cross-tenant reference-data leak. Emitted two ways so the sync-rules
+                // accessor is robust to the edition-3 token model: a top-level claim (readable via
+                // `auth.jwt() ->> 'environment_id'`) AND a `parameters` object (the canonical
+                // trusted-token-parameter channel, readable via `auth.parameters() ->> 'environment_id'`,
+                // which sync-rules.yaml uses). Mirrors the existing sub/user_id belt-and-suspenders.
+                new Claim(HttpCurrentUserAccessor.EnvironmentIdClaim, environmentId.ToString()),
+                new Claim(
+                    "parameters",
+                    JsonSerializer.Serialize(new Dictionary<string, string>
+                    {
+                        [HttpCurrentUserAccessor.EnvironmentIdClaim] = environmentId.ToString(),
+                    }),
+                    JsonClaimValueTypes.Json),
                 // iat as a NumericDate (JSON number). The PowerSync Service's `jose` verifier
                 // requires this claim; the JwtSecurityToken ctor only sets nbf/exp, so add it
                 // explicitly (Integer64 → serialized as a number, not a string).

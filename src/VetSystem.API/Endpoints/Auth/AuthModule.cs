@@ -129,7 +129,15 @@ public sealed class AuthModule : IEndpointModule
             throw new ForbiddenException("unauthenticated", "Authentication required.");
         }
 
-        var result = tokens.IssueToken(userId);
+        // M36 — the PowerSync token must carry the tenant so Sync Rules can scope reads to one
+        // environment. An env-less token (a platform super-admin's, M35) has no tenant scope and must
+        // never mint a sync token — it would otherwise be a leak vector once the env predicate lands.
+        if (user.EnvironmentId is not { } environmentId)
+        {
+            throw new ForbiddenException("environment_required", "A tenant context is required to sync.");
+        }
+
+        var result = tokens.IssueToken(userId, environmentId);
         return TypedResults.Ok(new PowerSyncTokenResponse(result.Token, result.ExpiresAt));
     }
 }
