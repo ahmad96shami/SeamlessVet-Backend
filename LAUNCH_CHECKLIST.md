@@ -10,13 +10,18 @@ Environment: ☐ staging ☐ production   Date: __________   Operator: _________
 ## 0. Pre-flight
 
 - [ ] `dc ps` shows `postgres` (healthy), `api` (healthy), `powersync` (up), `nginx` (up); `migrate`
-      exited 0.
+      and `web-build` both exited 0.
 - [ ] `.env.prod` filled; `secrets/appsettings.Production.json` + `secrets/cloudflare-origin/*` present.
-- [ ] Cloudflare SSL/TLS mode = **Full (Strict)**; `api.<domain>` and `sync.<domain>` resolve (proxied).
+- [ ] `../vet-frontend` checked out alongside this repo (the `web-build` build context).
+- [ ] Cloudflare SSL/TLS mode = **Full (Strict)**; `vet.<domain>`, `api.<domain>`, and `sync.<domain>`
+      resolve (proxied).
 - [ ] Bootstrap admin password changed from the seed value.
 
 ## 1. Smoke tests (through Cloudflare, `https://api.<domain>`)
 
+- [ ] **Web app:** `https://vet.<domain>` serves the SPA (RTL Arabic login); login as admin reaches the
+      shell; the browser Network tab shows API calls going to `https://api.<domain>` (CORS clean); the
+      PWA install prompt / offline shell works.
 - [ ] **Health:** `/health/live` → `{"status":"ok"}`; `/health/ready` → `status:"ok"`
       (all of database/hangfire/powersync `ok`).
 - [ ] **Auth:** log in as admin → access + refresh tokens issued; `/auth/refresh` rotates; bad password

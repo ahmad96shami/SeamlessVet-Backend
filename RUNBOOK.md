@@ -19,6 +19,7 @@ Operating the production backend stack on a single VPS with Docker Compose. Comp
                           │  Full (Strict)
                           ▼
    ┌──────────────────  nginx  ──────────────────┐   (terminates Cloudflare Origin cert)
+   │  vet.<domain>  → /srv/web  (static SPA)      │
    │  api.<domain>  → api:8080                    │
    │  sync.<domain> → powersync:8080              │
    └───────┬───────────────────────┬─────────────┘
@@ -29,6 +30,10 @@ Operating the production backend stack on a single VPS with Docker Compose. Comp
 ```
 
 - **One VPS, one compose project** (`name: vet`). Postgres is **never published** to the host.
+- **The Center Web App** is a static Vite PWA built by a one-shot `web-build` service from the
+  sibling `../vet-frontend` repo into the `webdist` volume, which nginx serves at `vet.<domain>`.
+  Both repos sit side-by-side on the VPS (e.g. `/opt/vet-backend` + `/opt/vet-frontend`). The API
+  base URL is **compile-time** — baked in as `VITE_API_URL=https://api.<domain>` (subdomain split).
 - **Hangfire runs in-process inside the `api` container** — per TECH_STACK, "Backend API + Hangfire" is
   one component (no Redis backplane). There is no separate worker container; see
   [Scale the Hangfire worker](#scale-the-hangfire-worker).
@@ -54,9 +59,10 @@ The rest of this doc assumes that `dc` alias.
 
 ## Prerequisites
 
-- A VPS (Palestinian provider) with SSH + Docker Engine + the Compose plugin. Verify: `docker version`,
-  `docker compose version`.
-- The repo checked out at `/opt/vet-backend` (adjust paths if different).
+- A VPS with SSH + Docker Engine + the Compose plugin. Verify: `docker version`, `docker compose version`.
+- **Both repos** checked out side-by-side: this one at `/opt/vet-backend` and the frontend at
+  `/opt/vet-frontend` (the `web-build` service uses `../vet-frontend` as its build context). Adjust the
+  `context:` in `docker-compose.prod.yaml` if your layout differs.
 - A registered domain on Cloudflare (see [Cloudflare setup](#cloudflare-setup-dns--origin-certificate)).
 - A Cloudflare R2 account: an **attachments** bucket and a **backups** bucket (see
   [R2 setup](#r2-setup-attachments--backups)).
@@ -78,8 +84,11 @@ The rest of this doc assumes that `dc` alias.
 2. **Build images:**
 
    ```bash
-   dc build           # builds the `api` (final) and `migrate` (EF bundle) images
+   dc build           # api (final), migrate (EF bundle), and web-build (../vet-frontend → static SPA)
    ```
+
+   `web-build` bakes `VITE_API_URL=https://api.${DOMAIN}` into the bundle at build time, so it must be
+   (re)built whenever `DOMAIN` changes or the frontend changes — `dc build web-build`.
 
 3. **Bring it up.** Compose orders it for you (postgres healthy → migrate completes → api healthy →
    powersync → nginx):
@@ -111,7 +120,9 @@ The rest of this doc assumes that `dc` alias.
    dc exec api curl -s   http://localhost:8080/.well-known/jwks.json | jq '.keys[].kid'
    ```
 
-   From outside, through Cloudflare: `curl -fsS https://api.<domain>/health/live`.
+   From outside, through Cloudflare: `curl -fsS https://api.<domain>/health/live`, and the web app:
+   `curl -fsS https://vet.<domain>/ | head` (should return the SPA `index.html`). Then open
+   `https://vet.<domain>` in a browser and log in.
 
 ### `/health/ready` states (observed)
 
@@ -123,17 +134,73 @@ The rest of this doc assumes that `dc` alias.
 
 ---
 
+## Deploy WITHOUT a domain (sslip.io + Let's Encrypt)
+
+For a VPS with only a public IP and no registered domain / no Cloudflare. Uses **sslip.io** (a free
+wildcard-DNS service: `anything.<ip>.sslip.io` resolves to `<ip>`) for real hostnames, and **Let's
+Encrypt** (direct, via the `docker-compose.letsencrypt.yaml` overlay) for browser-trusted TLS — so the
+offline PWA, subdomain routing, and everything else work exactly like the Cloudflare deploy.
+
+Prereqs: ports **80 and 443** open to the internet (HTTP-01 needs 80). On Hetzner, open both in the
+Cloud Firewall **and** the host `ufw`.
+
+1. **Config** — in `.env.prod` set the IP-based hostname + an email for expiry notices:
+
+   ```bash
+   DOMAIN=203.0.113.45.sslip.io        # ← your VPS public IP, dots kept, + .sslip.io
+   LETSENCRYPT_EMAIL=you@example.com
+   ```
+
+   (Everything else in `.env.prod` / `secrets/appsettings.Production.json` is the same as the normal
+   deploy. You do **not** need `secrets/cloudflare-origin/`.)
+
+2. **Issue the cert + bring up the stack** (one command — builds images, makes a temporary self-signed
+   cert so nginx can boot, serves the HTTP-01 challenge, gets the real cert, reloads):
+
+   ```bash
+   ./scripts/init-letsencrypt.sh --staging     # FIRST run: staging cert (avoids LE rate limits)
+   ./scripts/init-letsencrypt.sh               # then the real, browser-trusted cert
+   ```
+
+3. **Seed + verify** (same as the normal deploy, but with the `dcle` alias):
+
+   ```bash
+   alias dcle='docker compose --env-file .env.prod -f docker-compose.prod.yaml -f docker-compose.letsencrypt.yaml'
+   dcle run --rm api --seed
+   curl -fsS https://api.$DOMAIN/health/live      # {"status":"ok"}  (real cert ⇒ no -k needed)
+   ```
+   Open `https://vet.<ip>.sslip.io` and log in.
+
+**Renewal is automatic**: the `certbot` service runs `certbot renew` every 12h and nginx reloads every
+6h. **Use `dcle` (both compose files) for all ops** in this mode — `dc` alone would start nginx in
+Cloudflare-cert mode and fail.
+
+**Moving to a real domain later**: change `DOMAIN` in `.env.prod`, `dcle build web-build` (the API URL is
+baked into the SPA), then either re-run `init-letsencrypt.sh` (keep direct TLS) or switch to Cloudflare
+(drop the overlay, add `secrets/cloudflare-origin/`, use plain `dc` — see [Cloudflare setup](#cloudflare-setup-dns--origin-certificate)).
+
+---
+
 ## Redeploy / upgrade
 
 ```bash
+cd /opt/vet-backend && git pull
+cd /opt/vet-frontend && git pull        # the web app is built from here
 cd /opt/vet-backend
-git pull
 dc build
 dc up -d --wait --wait-timeout 180     # migrate re-runs (no-op if no new migrations), then api restarts
 ```
 
-`migrate` is safe to re-run — EF skips already-applied migrations. `restart: unless-stopped` keeps
-services up across reboots.
+`migrate` is safe to re-run — EF skips already-applied migrations. `web-build` re-runs too, refreshing
+the `webdist` volume with the new bundle before nginx comes back. `restart: unless-stopped` keeps the
+long-running services up across reboots (the two one-shots, `migrate` and `web-build`, stay `exited 0`).
+
+To redeploy **only the web app** (frontend change, no backend change):
+
+```bash
+cd /opt/vet-frontend && git pull && cd /opt/vet-backend
+dc build web-build && dc up -d web-build && dc exec nginx nginx -s reload
+```
 
 ---
 
@@ -276,7 +343,8 @@ Operations → "Dashboards & alert thresholds"** — keep this section a pointer
 
 ## Cloudflare setup (DNS + Origin Certificate)
 
-1. **DNS:** add proxied (orange-cloud) records for `api.<domain>` and `sync.<domain>` → the VPS IP.
+1. **DNS:** add proxied (orange-cloud) records for `vet.<domain>`, `api.<domain>`, and `sync.<domain>`
+   → the VPS IP (optionally the apex `<domain>` too — nginx 301s it to `vet.<domain>`).
 2. **Origin Certificate:** SSL/TLS → Origin Server → Create Certificate. Cover `<domain>` **and**
    `*.<domain>`. Save the cert + key to `secrets/cloudflare-origin/origin.pem` / `origin.key`
    (`chmod 600` the key). See `secrets/README.md` §2.

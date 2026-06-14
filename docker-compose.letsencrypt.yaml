@@ -1,0 +1,55 @@
+# Let's Encrypt (direct TLS) overlay — for deploying WITHOUT Cloudflare, e.g. on a raw IP via a free
+# sslip.io hostname (no registered domain needed). Apply ON TOP of the base prod compose:
+#
+#   alias dcle='docker compose --env-file .env.prod -f docker-compose.prod.yaml -f docker-compose.letsencrypt.yaml'
+#   # one-time, issues the cert (HTTP-01) and starts everything — see scripts/init-letsencrypt.sh:
+#   DOMAIN=<your-ip>.sslip.io LETSENCRYPT_EMAIL=you@example.com ./scripts/init-letsencrypt.sh
+#   dcle ps
+#
+# What this overlay changes vs the base (Cloudflare) stack:
+#   • nginx reads the certbot-issued cert at /etc/letsencrypt/live/vet.${DOMAIN}/ instead of the
+#     mounted Cloudflare origin cert (SSL_CERT/SSL_KEY overridden below). The leftover origin-certs
+#     bind mount from the base file is unused in this mode (harmless empty dir).
+#   • nginx serves the ACME HTTP-01 challenge from /var/www/certbot (already wired in the template's
+#     :80 server) and reloads every 6h to pick up renewed certs.
+#   • a `certbot` service renews the cert every 12h.
+
+services:
+  nginx:
+    environment:
+      # Override the Cloudflare cert path → the certbot lineage (named after the first -d, vet.${DOMAIN}).
+      SSL_CERT: /etc/letsencrypt/live/vet.${DOMAIN:?set DOMAIN in .env.prod}/fullchain.pem
+      SSL_KEY: /etc/letsencrypt/live/vet.${DOMAIN}/privkey.pem
+    volumes:
+      - certbot-etc:/etc/letsencrypt:ro
+      - certbot-www:/var/www/certbot:ro
+    # Reload every 6h so renewed certs are picked up without a manual restart. NOTE: the official nginx
+    # entrypoint runs its envsubst templating ONLY when its arg is `nginx`, so we background the reload
+    # loop and then `exec /docker-entrypoint.sh nginx …` (which re-renders the template) in foreground —
+    # a plain `/bin/sh -c …` command would skip templating and nginx would serve the default config.
+    command:
+      - /bin/sh
+      - -c
+      - |
+        ( while :; do sleep 6h & wait $${!}; nginx -s reload; done ) &
+        exec /docker-entrypoint.sh nginx -g 'daemon off;'
+
+  certbot:
+    image: certbot/certbot:latest
+    restart: unless-stopped
+    depends_on:
+      nginx:
+        condition: service_started
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - certbot-www:/var/www/certbot
+    # Attempt renewal every 12h (no-op until a cert exists; issuance is done by init-letsencrypt.sh).
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done
+
+volumes:
+  certbot-etc:
+  certbot-www:

@@ -1,10 +1,12 @@
 # Production stack — single VPS, Docker Compose. See vet-backend/RUNBOOK.md for deploy/restore.
 #
 # Topology:
-#   nginx ──TLS(Cloudflare Origin cert)──> api (Kestrel :8080, in-process Hangfire worker + SignalR)
-#                                      └──> powersync (:8080, mobile sync stream)
+#   nginx ──TLS(Cloudflare Origin cert)──> vet.${DOMAIN}  → static SPA (web-build one-shot → volume)
+#                                      └──> api.${DOMAIN}  → api (Kestrel :8080, Hangfire + SignalR)
+#                                      └──> sync.${DOMAIN} → powersync (:8080, mobile sync stream)
 #   api ──> postgres (private, not published)        migrate (one-shot) applies EF migrations first
 #   powersync ──logical replication──> postgres      (auto-migration is disabled in the app)
+#   web-build (one-shot) compiles ../vet-frontend's PWA and publishes it into the `webdist` volume
 #
 # Secrets:
 #   - Scalars (DB password, JWT key, R2 creds, bootstrap admin pw, Seq URL) live in ./.env.prod
@@ -84,6 +86,10 @@ services:
       ASPNETCORE_URLS: http://+:8080
       # DRY with the Postgres container's password; overrides the appsettings placeholder.
       ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=vet;Username=vet;Password=${PG_PASSWORD}
+      # The web app runs cross-origin (vet.${DOMAIN}) from the API (api.${DOMAIN}) under the subdomain
+      # split, so it MUST be an allowed CORS origin. Derived from DOMAIN here; add more (staging, etc.)
+      # as Cors__AllowedOrigins__1=… in .env.prod.
+      Cors__AllowedOrigins__0: https://vet.${DOMAIN}
     volumes:
       # The PowerSync RSA signing keypair (multi-line PEM) — merged over appsettings by the runtime
       # because ASPNETCORE_ENVIRONMENT=Production.
@@ -100,7 +106,7 @@ services:
       start_period: 40s
 
   powersync:
-    image: journeyapps/powersync-service:${POWERSYNC_IMAGE_TAG:-1.10.2}
+    image: journeyapps/powersync-service:${POWERSYNC_IMAGE_TAG:-1.21.0}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -124,8 +130,25 @@ services:
       - "8080"
     command: ["start"]
 
-  # TLS edge. Terminates the Cloudflare Origin Certificate and reverse-proxies the API and the
-  # PowerSync stream (both need WebSocket upgrade). See nginx/conf.d/vet.conf.template.
+  # One-shot: compiles the Center Web App (../vet-frontend, a separate repo checked out alongside this
+  # one — e.g. /opt/vet-backend + /opt/vet-frontend) into static files and copies them into the
+  # `webdist` volume, then exits 0. nginx waits for this to complete before serving vet.${DOMAIN}.
+  # The API base URL is compile-time for Vite, so it is baked in here as a build arg (subdomain split:
+  # the SPA talks to https://api.${DOMAIN}). Re-run on a frontend change: `dc build web-build && dc up -d`.
+  web-build:
+    build:
+      context: ../vet-frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_VERSION: ${NODE_VERSION:-22}
+        VITE_API_URL: https://api.${DOMAIN:?set DOMAIN in .env.prod}
+    restart: "no"
+    volumes:
+      - webdist:/out
+
+  # TLS edge. Terminates the Cloudflare Origin Certificate, serves the static web app, and
+  # reverse-proxies the API and the PowerSync stream (both need WebSocket upgrade).
+  # See nginx/conf.d/vet.conf.template.
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -134,18 +157,28 @@ services:
         condition: service_healthy
       powersync:
         condition: service_started
+      web-build:
+        condition: service_completed_successfully
     ports:
       - "80:80"
       - "443:443"
     environment:
-      # Substituted into the conf template at container start (envsubst).
+      # Substituted into the conf template at container start (envsubst). Only these names are expanded;
+      # nginx runtime vars ($host, $uri, $proxy_add_x_forwarded_for, …) are left intact.
       DOMAIN: ${DOMAIN:?set DOMAIN in .env.prod}
-      # Only substitute ${DOMAIN}; leave nginx runtime vars ($host, $proxy_add_x_forwarded_for, …) intact.
-      NGINX_ENVSUBST_FILTER: "^DOMAIN$$"
+      # Cloudflare mode: the TLS edge cert is the mounted Cloudflare Origin Certificate. The Let's Encrypt
+      # overlay (docker-compose.letsencrypt.yaml) overrides these two to the certbot-issued cert path.
+      SSL_CERT: /etc/nginx/origin-certs/origin.pem
+      SSL_KEY: /etc/nginx/origin-certs/origin.key
+      NGINX_ENVSUBST_FILTER: "^(DOMAIN|SSL_CERT|SSL_KEY)$$"
     volumes:
       - ./nginx/conf.d:/etc/nginx/templates:ro
       - ./secrets/cloudflare-origin:/etc/nginx/origin-certs:ro
+      # Static SPA bundle published by the web-build one-shot (read-only).
+      - webdist:/srv/web:ro
 
 volumes:
   pgdata:
   api-logs:
+  # Static web bundle: written by web-build, served read-only by nginx.
+  webdist:
