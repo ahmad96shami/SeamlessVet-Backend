@@ -118,6 +118,11 @@ builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<UserAdminService>();
 
+// M35 — platform identity (super-admin outside any tenant) + the minimal provisioning console.
+builder.Services.AddScoped<IPlatformTokenService, PlatformTokenService>();
+builder.Services.AddScoped<PlatformAuthService>();
+builder.Services.AddScoped<VetSystem.API.Platform.PlatformTenantsService>();
+
 // M2 — catalog + system settings
 builder.Services.AddScoped<VetSystem.API.Catalog.ProductsAdminService>();
 builder.Services.AddScoped<VetSystem.API.Catalog.ServicesAdminService>();

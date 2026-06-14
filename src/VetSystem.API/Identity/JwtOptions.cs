@@ -9,6 +9,12 @@ public sealed class JwtOptions
     public string SecretKey { get; set; } = string.Empty;
     public int AccessTokenMinutes { get; set; } = 60;
     public int RefreshTokenDays { get; set; } = 30;
+
+    /// <summary>
+    /// M35 — lifetime of a platform-admin access token. Longer than a tenant access token because the
+    /// platform console has no refresh flow in v1 (rare manual ops); the token is re-issued by login.
+    /// </summary>
+    public int PlatformTokenMinutes { get; set; } = 480;
 }
 
 public sealed class PowerSyncOptions

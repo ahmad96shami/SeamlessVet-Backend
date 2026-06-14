@@ -8,6 +8,13 @@ public sealed class HttpCurrentUserAccessor : ICurrentUserAccessor
     public const string EnvironmentIdClaim = "environment_id";
     public const string PermissionsClaim = "perms";
 
+    /// <summary>
+    /// M35 — present (value <c>"true"</c>) only on a platform super-admin token. Carries NO
+    /// <see cref="EnvironmentIdClaim"/>/role, so such a token is invisible to the env-scoped query
+    /// filter and is gated to <c>/platform/*</c> by <c>RequirePlatformAdminFilter</c>.
+    /// </summary>
+    public const string PlatformAdminClaim = "platform_admin";
+
     private readonly IHttpContextAccessor _httpContextAccessor;
 
     public HttpCurrentUserAccessor(IHttpContextAccessor httpContextAccessor)
