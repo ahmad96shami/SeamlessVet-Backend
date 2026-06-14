@@ -72,6 +72,10 @@ public sealed class DataSeeder
 
         await SeedBootstrapAdminAsync(BootstrapEnvironmentId, cancellationToken);
 
+        // M35 — the platform super-admin lives outside any tenant; it is seeded once from config and
+        // is NOT cleared by --force-seed (platform_admins is absent from ClearAsync's TRUNCATE).
+        await SeedPlatformAdminAsync(cancellationToken);
+
         if (demo)
         {
             // Opening stock runs after the admin seed: every inventory_movement needs a valid
@@ -410,6 +414,50 @@ public sealed class DataSeeder
 
         await _db.SaveChangesAsync(cancellationToken);
         _logger.LogInformation("Seeded bootstrap admin user in environment {EnvironmentId}", environmentId);
+    }
+
+    /// <summary>
+    /// M35 — seeds the bootstrap platform super-admin from the <c>PlatformAdmin</c> config section
+    /// (FullName / Phone / Password). Same placeholder-skip convention as the bootstrap tenant admin:
+    /// an unset/placeholder password is a no-op (set it via <c>dotnet user-secrets</c>). Global, not
+    /// env-scoped, and idempotent (skips when a platform admin with this phone already exists).
+    /// </summary>
+    private async Task SeedPlatformAdminAsync(CancellationToken cancellationToken)
+    {
+        var section = _configuration.GetSection("PlatformAdmin");
+        var phone = section["Phone"];
+        var password = section["Password"];
+
+        if (string.IsNullOrWhiteSpace(phone) || string.IsNullOrWhiteSpace(password)
+            || password.StartsWith("PLACEHOLDER", StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "PlatformAdmin:Password not configured (placeholder still in appsettings). "
+                + "Skipping platform admin seed. Set via dotnet user-secrets to enable.");
+            return;
+        }
+
+        var exists = await _db.PlatformAdmins.AnyAsync(p => p.Phone == phone, cancellationToken);
+        if (exists)
+        {
+            return;
+        }
+
+        var now = _clock.UtcNow;
+        _db.PlatformAdmins.Add(new PlatformAdmin
+        {
+            // platform_admins is a plain POCO — the auditing interceptor skips it, so set id/timestamps here.
+            Id = Guid.CreateVersion7(),
+            FullName = section["FullName"] ?? "Platform Owner",
+            Phone = phone,
+            PasswordHash = _hasher.Hash(password),
+            Status = PlatformAdminStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
+        });
+
+        await _db.SaveChangesAsync(cancellationToken);
+        _logger.LogInformation("Seeded bootstrap platform admin {Phone}", phone);
     }
 
     private async Task ClearAsync(CancellationToken cancellationToken)

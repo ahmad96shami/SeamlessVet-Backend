@@ -18,6 +18,8 @@ public sealed class ApplicationDbContext : DbContext
     }
 
     public DbSet<DomainEnvironment> Environments => Set<DomainEnvironment>();
+    // M35 — platform super-admins, outside any tenant (plain POCO, no env scope).
+    public DbSet<PlatformAdmin> PlatformAdmins => Set<PlatformAdmin>();
     public DbSet<Partner> Partners => Set<Partner>();
     public DbSet<PartnershipShare> PartnershipShares => Set<PartnershipShare>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
