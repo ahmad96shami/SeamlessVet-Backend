@@ -41,6 +41,30 @@ public sealed class ReferenceBucketSyncRulesTests
             "reference bucket must pull the services catalog");
     }
 
+    /// <summary>
+    /// M36 — the reference stream has no doctor filter, so before this milestone a doctor in center A
+    /// streamed center B's products/services. The env predicate is the only thing scoping it: both
+    /// the products and the services query must compare <c>environment_id</c> to the trusted token
+    /// parameter, so a pre-M36 token (no env claim) fails closed and never leaks another tenant.
+    /// </summary>
+    [Fact]
+    public void SyncRulesYaml_ScopesReferenceDataByEnvironment()
+    {
+        var contents = File.ReadAllText(LocateSyncRulesFile());
+
+        contents.Should().MatchRegex(
+            @"SELECT\s+\*\s+FROM\s+products\s+WHERE\s+environment_id\s*=\s*auth\.parameters\(\)\s*->>\s*'environment_id'",
+            "the reference stream's products query must be scoped to the token's environment (M36)");
+        contents.Should().MatchRegex(
+            @"SELECT\s+\*\s+FROM\s+services\s+WHERE\s+environment_id\s*=\s*auth\.parameters\(\)\s*->>\s*'environment_id'",
+            "the reference stream's services query must be scoped to the token's environment (M36)");
+
+        // Defense-in-depth: the shared CTE anchors that drive every doctor-scoped stream are env-scoped too.
+        contents.Should().MatchRegex(
+            @"my_customers:\s*SELECT\s+id\s+AS\s+customer_id\s+FROM\s+customers\s+WHERE\s+assigned_doctor_id\s*=\s*auth\.user_id\(\)\s+AND\s+environment_id\s*=\s*auth\.parameters\(\)\s*->>\s*'environment_id'",
+            "the my_customers CTE anchor must carry the env predicate (M36 defense-in-depth)");
+    }
+
     [Fact]
     public async Task AdminWrites_PersistRowsThatTheReferenceBucketWouldSync()
     {
