@@ -572,6 +572,35 @@ if (hangfireEnabled)
         "monthly-salary-accrual", j => j.RunAsync(CancellationToken.None), "0 6 1 * *");
 }
 
+// Targeted starter-catalog seed for ONE tenant (by code), e.g. after provisioning a new client center:
+//   dotnet VetSystem.API.dll --seed-catalog <TENANT_CODE> [--no-stock]
+// Seeds the standard catalog (+ opening stock unless --no-stock) into just that environment. Idempotent.
+var catalogIdx = Array.IndexOf(args, "--seed-catalog");
+if (catalogIdx >= 0)
+{
+    var code = catalogIdx + 1 < args.Length ? args[catalogIdx + 1] : null;
+    if (string.IsNullOrWhiteSpace(code) || code.StartsWith("--", StringComparison.Ordinal))
+    {
+        Console.Error.WriteLine("Usage: --seed-catalog <TENANT_CODE> [--no-stock]");
+        Environment.ExitCode = 1;
+        return;
+    }
+
+    await using var scope = app.Services.CreateAsyncScope();
+    var seeder = scope.ServiceProvider.GetRequiredService<DataSeeder>();
+    try
+    {
+        await seeder.SeedCatalogForEnvironmentAsync(code, includeStock: !args.Contains("--no-stock"));
+    }
+    catch (InvalidOperationException ex)
+    {
+        // Expected, user-facing failure (e.g. unknown tenant code) — print the message, not a stack dump.
+        Console.Error.WriteLine(ex.Message);
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args.Contains("--seed") || args.Contains("--force-seed"))
 {
     await using var scope = app.Services.CreateAsyncScope();

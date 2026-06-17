@@ -87,6 +87,54 @@ public sealed class DataSeeder
         }
     }
 
+    /// <summary>
+    /// Seeds the standard starter catalog (products: medications + general goods + vaccines;
+    /// services: clinic + field — all with Arabic/Latin names and default prices) into ONE existing
+    /// environment, resolved by its <paramref name="environmentCode"/>. Optionally also seeds opening
+    /// warehouse stock so the POS is immediately sellable. Unlike <c>--seed --demo</c> (which sprays the
+    /// catalog into every environment), this targets a single tenant — the path used to provision a new
+    /// client center with starter data. Idempotent (matches on Arabic name), so it is safe to re-run.
+    /// </summary>
+    public async Task SeedCatalogForEnvironmentAsync(
+        string environmentCode, bool includeStock, CancellationToken cancellationToken = default)
+    {
+        await _db.Database.MigrateAsync(cancellationToken);
+
+        var normalized = environmentCode.Trim();
+        var env = await _db.Environments
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(
+                e => e.DeletedAt == null && e.Code.ToLower() == normalized.ToLower(),
+                cancellationToken);
+
+        if (env is null)
+        {
+            var codes = await _db.Environments
+                .IgnoreQueryFilters()
+                .Where(e => e.DeletedAt == null)
+                .Select(e => e.Code)
+                .ToListAsync(cancellationToken);
+            var available = codes.Count == 0 ? "(none)" : string.Join(", ", codes);
+            _logger.LogError(
+                "No active environment with code '{Code}'. Available codes: {Codes}",
+                environmentCode, available);
+            throw new InvalidOperationException(
+                $"No active environment with code '{environmentCode}'. Available codes: {available}");
+        }
+
+        _logger.LogInformation(
+            "Seeding starter catalog into environment {Code} ({EnvironmentId}); includeStock={IncludeStock}",
+            env.Code, env.Id, includeStock);
+
+        await SeedDemoCatalogAsync(env.Id, cancellationToken);
+        if (includeStock)
+        {
+            await SeedDemoStockAsync(env.Id, cancellationToken);
+        }
+
+        _logger.LogInformation("Starter catalog seed complete for environment {Code}.", env.Code);
+    }
+
     private async Task SeedBootstrapEnvironmentAsync(CancellationToken cancellationToken)
     {
         var exists = await _db.Environments
