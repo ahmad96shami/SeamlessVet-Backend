@@ -88,6 +88,20 @@ public sealed class InvoiceValidatorTests
         => Pos.Validate(Build(idempotencyKey: "")).IsValid.Should().BeFalse();
 
     [Fact]
+    public void Pos_NullCollections_FailGracefully_WithoutThrowing()
+    {
+        // A partial/empty body (e.g. "{}") leaves Items/Payments null after JSON binding. Validation
+        // must report a clean failure (-> 400), not throw ArgumentNullException out of the back-link
+        // rule (which under a debugger paused the request thread; in prod it would be a 500).
+        var req = new PosInvoiceRequest(
+            Id: null, CustomerId: null, VisitId: null, Number: null, DiscountAmount: 0m,
+            Items: null!, Payments: null!, IdempotencyKey: "");
+        var validate = () => Pos.Validate(req);
+        validate.Should().NotThrow();
+        validate().IsValid.Should().BeFalse("missing items + blank idempotency key are invalid");
+    }
+
+    [Fact]
     public void Pos_BackLinkedLine_BothPrescriptionAndProcedure_Fails()
     {
         var req = Build(

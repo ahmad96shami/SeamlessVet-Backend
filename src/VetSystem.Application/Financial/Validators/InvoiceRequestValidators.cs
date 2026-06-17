@@ -56,6 +56,10 @@ internal static class InvoiceLineRules
     /// service only sees committed invoices, not sibling lines of this request).</summary>
     public static bool BackLinksAreDistinct(IReadOnlyList<InvoiceLineRequest> items)
     {
+        // A missing `items` array (e.g. an empty/partial body) has no back-links to collide; the
+        // "at least one line" rule reports the real problem. Guard so we return a clean 400 instead
+        // of throwing ArgumentNullException out of LINQ.
+        if (items is null) return true;
         var rx = items.Where(i => i.PrescriptionId is not null).Select(i => i.PrescriptionId!.Value).ToList();
         var procedures = items.Where(i => i.ProcedureId is not null).Select(i => i.ProcedureId!.Value).ToList();
         var vaccinations = items.Where(i => i.VaccinationId is not null).Select(i => i.VaccinationId!.Value).ToList();
@@ -95,7 +99,7 @@ public sealed class PosInvoiceRequestValidator : AbstractValidator<PosInvoiceReq
         // A POS sale needs at least one explicit line, unless it is tied to a visit whose dispensed
         // meds / procedures the server will auto-assemble.
         RuleFor(r => r)
-            .Must(r => r.Items.Count > 0 || r.VisitId is not null)
+            .Must(r => (r.Items?.Count ?? 0) > 0 || r.VisitId is not null)
             .WithMessage("Provide at least one line item, or link a visit to auto-assemble its charges.");
     }
 }
