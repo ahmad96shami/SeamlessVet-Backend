@@ -1,3 +1,4 @@
+using System.IdentityModel.Tokens.Jwt;
 using FluentAssertions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
@@ -49,6 +50,7 @@ public sealed class AuthLifecycleIntegrationTests
             hasher,
             new JwtTokenService(jwtOptions, clock),
             new EfRefreshTokenStore(anonDb, tokenHasher, clock),
+            new PermissionResolver(anonDb, new MemoryCache(new MemoryCacheOptions())),
             clock,
             jwtOptions);
 
@@ -102,6 +104,7 @@ public sealed class AuthLifecycleIntegrationTests
             hasher,
             new JwtTokenService(jwtOptions, clock),
             new EfRefreshTokenStore(userDb, tokenHasher, clock),
+            new PermissionResolver(userDb, new MemoryCache(new MemoryCacheOptions())),
             clock,
             jwtOptions);
 
@@ -193,6 +196,7 @@ public sealed class AuthLifecycleIntegrationTests
             hasher,
             new JwtTokenService(jwtOptions, clock),
             new EfRefreshTokenStore(anonDb, new Sha256RefreshTokenHasher(), clock),
+            new PermissionResolver(anonDb, new MemoryCache(new MemoryCacheOptions())),
             clock,
             jwtOptions);
 
@@ -212,6 +216,82 @@ public sealed class AuthLifecycleIntegrationTests
             new CreateUserRequest("Created Field Vet", "+970555333445", null, "FieldVet_pw_1!", RoleKey.VetField, "LIC-9", null),
             CancellationToken.None);
         (await adminDb.FieldInventories.AnyAsync(f => f.DoctorId == fieldVet.Id)).Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Regression for the production bug: a receptionist granted <c>invoices.write</c> via a
+    /// per-user override couldn't see POS, because the web UI gates by role and the token never
+    /// carried permissions. The grant must now ride the login token as <c>perms</c> claims so the
+    /// client can surface POS. (Uses the override path — which works regardless of role-default
+    /// seeding — exactly mirroring the admin's action in the bug report.)
+    /// </summary>
+    [Fact]
+    public async Task Login_TokenCarriesGrantedPermission_AsPermsClaim()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        await SeedRolesAndPermissionsAsync(scope);
+        var admin = await SeedAdminAsync(scope);
+
+        var hasher = new BCryptPasswordHasher();
+        var clock = new FakeClock(DateTimeOffset.UtcNow);
+        var adminUser = new FakeCurrentUser
+        {
+            IsAuthenticated = true,
+            EnvironmentId = scope.EnvironmentId,
+            UserId = admin.Id,
+            Role = RoleKey.Admin,
+        };
+        await using var adminDb = scope.CreateDbContext(adminUser);
+        var adminSvc = new UserAdminService(
+            adminDb,
+            new NumberPrefixGenerator(adminDb),
+            new PermissionResolver(adminDb, new MemoryCache(new MemoryCacheOptions())),
+            clock,
+            adminUser,
+            hasher);
+
+        // A receptionist — whose role default does NOT include invoices.write …
+        var receptionist = await adminSvc.CreateUserAsync(
+            new CreateUserRequest("Front Desk", "+970555777888", null, "Reception_pw_1!", RoleKey.Receptionist, null, null),
+            CancellationToken.None);
+
+        // … is granted invoices.write via a per-user override (the admin's action in the bug report).
+        await adminSvc.AddPermissionOverrideAsync(
+            receptionist.Id,
+            new PermissionOverrideRequest(PermissionKey.InvoicesWrite, OverrideEffect.Grant),
+            CancellationToken.None);
+
+        var jwtOptions = Options.Create(new JwtOptions
+        {
+            Issuer = "test",
+            Audience = "test",
+            SecretKey = "integration-test-secret-key-min-32-bytes-123",
+            AccessTokenMinutes = 15,
+            RefreshTokenDays = 7,
+        });
+        await using var anonDb = scope.CreateDbContext(new FakeCurrentUser { EnvironmentId = scope.EnvironmentId });
+        var auth = new AuthService(
+            anonDb,
+            hasher,
+            new JwtTokenService(jwtOptions, clock),
+            new EfRefreshTokenStore(anonDb, new Sha256RefreshTokenHasher(), clock),
+            new PermissionResolver(anonDb, new MemoryCache(new MemoryCacheOptions())),
+            clock,
+            jwtOptions);
+
+        var pair = await auth.LoginAsync(
+            new LoginRequest(scope.EnvironmentId, "+970555777888", "Reception_pw_1!"),
+            CancellationToken.None);
+
+        var token = new JwtSecurityTokenHandler().ReadJwtToken(pair.AccessToken);
+        var perms = token.Claims
+            .Where(c => c.Type == HttpCurrentUserAccessor.PermissionsClaim)
+            .Select(c => c.Value)
+            .ToArray();
+
+        perms.Should().Contain(
+            PermissionKey.InvoicesWrite,
+            "the granted permission must ride the token so the client can show POS");
     }
 
     private static async Task SeedRolesAndPermissionsAsync(PgTestScope scope)

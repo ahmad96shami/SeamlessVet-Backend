@@ -39,18 +39,28 @@ public sealed class JwtTokenService : IJwtTokenService
         var now = _clock.UtcNow;
         var expires = now.AddMinutes(_options.AccessTokenMinutes);
 
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, principal.UserId.ToString()),
+            new(JwtRegisteredClaimNames.Jti, Guid.CreateVersion7().ToString()),
+            new("role", principal.RoleKey),
+            new(ClaimTypes.Role, principal.RoleKey),
+            new(HttpCurrentUserAccessor.EnvironmentIdClaim, principal.EnvironmentId.ToString()),
+        };
+
+        // One `perms` claim per effective permission so clients can gate UI by permission, not just
+        // role (e.g. a receptionist granted invoices.write should see POS). A single permission
+        // serialises as a scalar and multiple as a JSON array — clients normalise both.
+        if (principal.Permissions is { Count: > 0 } perms)
+        {
+            claims.AddRange(perms.Select(p => new Claim(HttpCurrentUserAccessor.PermissionsClaim, p)));
+        }
+
         var handler = new JwtSecurityTokenHandler();
         var token = new JwtSecurityToken(
             issuer: _options.Issuer,
             audience: _options.Audience,
-            claims:
-            [
-                new Claim(JwtRegisteredClaimNames.Sub, principal.UserId.ToString()),
-                new Claim(JwtRegisteredClaimNames.Jti, Guid.CreateVersion7().ToString()),
-                new Claim("role", principal.RoleKey),
-                new Claim(ClaimTypes.Role, principal.RoleKey),
-                new Claim(HttpCurrentUserAccessor.EnvironmentIdClaim, principal.EnvironmentId.ToString()),
-            ],
+            claims: claims,
             notBefore: now.UtcDateTime,
             expires: expires.UtcDateTime,
             signingCredentials: new SigningCredentials(_signingKey, SecurityAlgorithms.HmacSha256));

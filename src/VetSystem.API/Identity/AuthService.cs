@@ -19,6 +19,7 @@ public sealed class AuthService
     private readonly IPasswordHasher _hasher;
     private readonly IJwtTokenService _tokens;
     private readonly IRefreshTokenStore _refreshStore;
+    private readonly IPermissionResolver _permissions;
     private readonly IClock _clock;
     private readonly JwtOptions _jwt;
 
@@ -27,6 +28,7 @@ public sealed class AuthService
         IPasswordHasher hasher,
         IJwtTokenService tokens,
         IRefreshTokenStore refreshStore,
+        IPermissionResolver permissions,
         IClock clock,
         IOptions<JwtOptions> jwtOptions)
     {
@@ -34,6 +36,7 @@ public sealed class AuthService
         _hasher = hasher;
         _tokens = tokens;
         _refreshStore = refreshStore;
+        _permissions = permissions;
         _clock = clock;
         _jwt = jwtOptions.Value;
     }
@@ -183,7 +186,8 @@ public sealed class AuthService
             TimeSpan.FromDays(_jwt.RefreshTokenDays),
             cancellationToken);
 
-        var access = _tokens.IssueAccessToken(new UserPrincipal(user.Id, user.EnvironmentId, roleKey));
+        var perms = await _permissions.ResolveAsync(user.Id, user.EnvironmentId, cancellationToken);
+        var access = _tokens.IssueAccessToken(new UserPrincipal(user.Id, user.EnvironmentId, roleKey, perms));
 
         return new TokenPair(
             access.Token,
@@ -262,7 +266,8 @@ public sealed class AuthService
     {
         var roleKey = await GetRoleKeyAsync(user.RoleId, cancellationToken);
 
-        var access = _tokens.IssueAccessToken(new UserPrincipal(user.Id, user.EnvironmentId, roleKey));
+        var perms = await _permissions.ResolveAsync(user.Id, user.EnvironmentId, cancellationToken);
+        var access = _tokens.IssueAccessToken(new UserPrincipal(user.Id, user.EnvironmentId, roleKey, perms));
         var rawRefresh = _tokens.IssueRefreshTokenValue();
         var stored = await _refreshStore.IssueAsync(
             user.Id,
