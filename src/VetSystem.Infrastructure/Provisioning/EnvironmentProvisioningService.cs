@@ -331,6 +331,8 @@ public sealed class EnvironmentProvisioningService : IEnvironmentProvisioningSer
                 // M31: the accountant manages employees (salaries/loans) and pays them.
                 PermissionKey.EmployeesManage,
                 PermissionKey.EmployeesPay,
+                // Operating expenses (water/electricity/rent/…): the accountant records and pays them.
+                PermissionKey.OperatingExpensesManage,
             ],
             [RoleKey.InventoryStaff] = [PermissionKey.InventoryAdjust, PermissionKey.CatalogWrite],
             // M3: vet roles get customers.write so field doctors can author customers offline via
@@ -388,6 +390,8 @@ public sealed class EnvironmentProvisioningService : IEnvironmentProvisioningSer
         PermissionKey.DoctorPartnersPay => "Pay doctor-partners against their entitlement balances.",
         PermissionKey.EmployeesManage => "Manage employees (salaries, loans) and view their HR ledger balances.",
         PermissionKey.EmployeesPay => "Pay employees (salaries, loans, repayments).",
+        PermissionKey.RolesManage => "Create custom roles and edit the permissions of any role.",
+        PermissionKey.OperatingExpensesManage => "Record and manage operating expenses (water, electricity, rent, …).",
         _ => key,
     };
 }

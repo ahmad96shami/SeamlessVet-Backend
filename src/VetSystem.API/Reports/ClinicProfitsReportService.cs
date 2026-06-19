@@ -87,7 +87,34 @@ public sealed class ClinicProfitsReportService
         var netProfit = revenue - cogs; // gross-margin policy: doctor shares are a separate line, not a cost
 
         var asOf = to ?? DateOnly.FromDateTime(_clock.UtcNow.UtcDateTime);
+        // Partner distribution stays on the gross-margin net (unchanged settlement basis); operating
+        // expenses and payables are layered on top for display only.
         var split = await _distribution.DistributeAsync(netProfit, envId, asOf, cancellationToken);
+
+        // Operating expenses (water/electricity/rent/…) recognized in the window — subtracted from the
+        // displayed net profit. IncurredOn is a date; the window end is exclusive midnight, so a
+        // date-of-end upper bound keeps the last day inclusive.
+        var startDate = DateOnly.FromDateTime(start.UtcDateTime);
+        var endDate = DateOnly.FromDateTime(end.UtcDateTime);
+        var operatingExpenses = await _db.OperatingExpenses.AsNoTracking()
+            .Where(e => e.IncurredOn >= startDate && e.IncurredOn < endDate)
+            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+
+        var netOperatingProfit = netProfit - operatingExpenses;
+
+        // "Amount owed to others" — a current snapshot (independent of the window) of every positive
+        // accounts-payable balance plus any unpaid operating expenses.
+        var payablesSuppliers = await _db.SupplierLedgers.AsNoTracking()
+            .Where(l => l.Balance > 0m).SumAsync(l => (decimal?)l.Balance, cancellationToken) ?? 0m;
+        var payablesDoctorPartners = await _db.DoctorPartnerLedgers.AsNoTracking()
+            .Where(l => l.Balance > 0m).SumAsync(l => (decimal?)l.Balance, cancellationToken) ?? 0m;
+        var payablesEmployees = await _db.EmployeeLedgers.AsNoTracking()
+            .Where(l => l.Balance > 0m).SumAsync(l => (decimal?)l.Balance, cancellationToken) ?? 0m;
+        var payablesUnpaidExpenses = await _db.OperatingExpenses.AsNoTracking()
+            .Where(e => !e.Paid).SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+
+        var payablesOutstanding =
+            payablesSuppliers + payablesDoctorPartners + payablesEmployees + payablesUnpaidExpenses;
 
         return new ClinicProfitsReportResponse(
             from,
@@ -100,6 +127,14 @@ public sealed class ClinicProfitsReportService
             DistributedToPartners: split.DistributedTotal,
             RetainedByClinic: split.Retained,
             PartnerAllocations: split.Allocations,
-            SettlementDiscounts: settlementDiscounts);
+            SettlementDiscounts: settlementDiscounts,
+            OperatingExpenses: operatingExpenses,
+            NetOperatingProfit: netOperatingProfit,
+            PayablesSuppliers: payablesSuppliers,
+            PayablesDoctorPartners: payablesDoctorPartners,
+            PayablesEmployees: payablesEmployees,
+            PayablesUnpaidExpenses: payablesUnpaidExpenses,
+            PayablesOutstanding: payablesOutstanding,
+            NetAfterObligations: netOperatingProfit - payablesOutstanding);
     }
 }

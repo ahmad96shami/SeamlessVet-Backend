@@ -27,6 +27,12 @@ public sealed class UsersModule : IEndpointModule
             .AddEndpointFilter(new IdempotencyKeyFilter("user_create"))
             .WithName("Admin_Users_Create");
 
+        group.MapPatch("/{id:guid}", Update)
+            .RequirePermission(PermissionKey.UsersManage)
+            .AddEndpointFilter<ValidationFilter<UpdateUserRequest>>()
+            .AddEndpointFilter(new IdempotencyKeyFilter("user_update"))
+            .WithName("Admin_Users_Update");
+
         group.MapPost("/{id:guid}/deactivate", Deactivate)
             .RequirePermission(PermissionKey.UsersManage)
             .AddEndpointFilter(new IdempotencyKeyFilter("user_deactivate"))
@@ -69,6 +75,16 @@ public sealed class UsersModule : IEndpointModule
         CancellationToken cancellationToken)
     {
         var user = await admin.CreateUserAsync(request, cancellationToken);
+        return TypedResults.Ok(user);
+    }
+
+    private static async Task<IResult> Update(
+        Guid id,
+        UpdateUserRequest request,
+        UserAdminService admin,
+        CancellationToken cancellationToken)
+    {
+        var user = await admin.UpdateUserAsync(id, request, cancellationToken);
         return TypedResults.Ok(user);
     }
 

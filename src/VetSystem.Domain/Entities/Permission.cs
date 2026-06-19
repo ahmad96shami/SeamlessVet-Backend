@@ -63,6 +63,12 @@ public static class PermissionKey
     public const string EmployeesManage = "employees.manage";
     public const string EmployeesPay = "employees.pay";
 
+    // Roles & permission management (custom roles + editing built-in role permissions)
+    public const string RolesManage = "roles.manage";
+
+    // Operating expenses (water, electricity, rent, …)
+    public const string OperatingExpensesManage = "operating_expenses.manage";
+
     public static readonly IReadOnlyCollection<string> All =
     [
         UsersApprove, UsersManage, UsersPermissionsOverride,
@@ -78,5 +84,7 @@ public static class PermissionKey
         SuppliersWrite,
         DoctorPartnersManage, DoctorPartnersPay,
         EmployeesManage, EmployeesPay,
+        RolesManage,
+        OperatingExpensesManage,
     ];
 }

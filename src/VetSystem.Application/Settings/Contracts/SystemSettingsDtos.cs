@@ -7,6 +7,10 @@ namespace VetSystem.Application.Settings.Contracts;
 /// </summary>
 public sealed record SystemSettingsResponse(
     Guid Id,
+    // The center's display name. Not stored on `system_settings` — it lives on the owning
+    // `environments` row (the same name shown in the login center-picker + the app shell), surfaced
+    // here so the manager can rename their center from the one Settings screen.
+    string? CenterName,
     decimal DefaultExamFee,
     decimal DefaultCheckupFee,
     bool EntitlementEnabledGlobal,
@@ -33,6 +37,8 @@ public sealed record SystemSettingsResponse(
 /// as the raw escape hatch.
 /// </summary>
 public sealed record SystemSettingsPatchRequest(
+    // Renames the owning `environments` row when supplied (the center's display name everywhere).
+    string? CenterName,
     decimal? DefaultExamFee,
     decimal? DefaultCheckupFee,
     bool? EntitlementEnabledGlobal,

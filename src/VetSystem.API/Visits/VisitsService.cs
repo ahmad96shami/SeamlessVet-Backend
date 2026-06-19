@@ -9,6 +9,7 @@ using VetSystem.Application.Visits;
 using VetSystem.Application.Visits.Contracts;
 using VetSystem.Domain.Common;
 using VetSystem.Domain.Entities;
+using VetSystem.Domain.Events;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Visits;
@@ -33,6 +34,7 @@ public sealed class VisitsService
     private readonly ILedgerService _ledgers;
     private readonly IOwnerLedgerResolver _ownerLedger;
     private readonly NightStaysService _nightStays;
+    private readonly IDomainEventPublisher _events;
 
     public VisitsService(
         ApplicationDbContext db,
@@ -43,7 +45,8 @@ public sealed class VisitsService
         IVisitNumberGenerator visitNumberGen,
         ILedgerService ledgers,
         IOwnerLedgerResolver ownerLedger,
-        NightStaysService nightStays)
+        NightStaysService nightStays,
+        IDomainEventPublisher events)
     {
         _db = db;
         _currentUser = currentUser;
@@ -54,6 +57,7 @@ public sealed class VisitsService
         _ledgers = ledgers;
         _ownerLedger = ownerLedger;
         _nightStays = nightStays;
+        _events = events;
     }
 
     public async Task<IReadOnlyList<VisitResponse>> ListAsync(
@@ -179,6 +183,23 @@ public sealed class VisitsService
 
         _db.Visits.Add(visit);
         await _db.SaveChangesAsync(cancellationToken);
+
+        // Notify the assigned doctor when someone else (e.g. a receptionist) created the visit for
+        // them — not when a doctor registers their own visit. Best-effort: the publisher runs the
+        // handler in a fresh scope, so a notification hiccup never fails the visit create.
+        if (_currentUser.UserId != visit.DoctorId)
+        {
+            await _events.PublishAsync(
+                new VisitAssignedEvent(
+                    visit.EnvironmentId,
+                    visit.Id,
+                    visit.VisitNumber,
+                    visit.DoctorId,
+                    visit.CustomerId,
+                    visit.VisitType,
+                    _currentUser.UserId),
+                cancellationToken);
+        }
 
         return _mapper.Map<VisitResponse>(visit);
     }

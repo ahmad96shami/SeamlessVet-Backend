@@ -92,6 +92,9 @@ public sealed class ApplicationDbContext : DbContext
     public DbSet<EmployeeLedgerEntry> EmployeeLedgerEntries => Set<EmployeeLedgerEntry>();
     public DbSet<EmployeePayment> EmployeePayments => Set<EmployeePayment>();
 
+    // Operating expenses (water, electricity, rent, …) — general costs that reduce net profit.
+    public DbSet<OperatingExpense> OperatingExpenses => Set<OperatingExpense>();
+
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<DeviceToken> DeviceTokens => Set<DeviceToken>();
 

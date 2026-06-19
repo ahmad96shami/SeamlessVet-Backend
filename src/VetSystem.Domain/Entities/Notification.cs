@@ -42,9 +42,13 @@ public static class NotificationType
     public const string EntitlementCredited = "entitlement_credited";
     public const string ReportDelivery = "report_delivery";
 
+    /// <summary>A visit was created by someone else (e.g. a receptionist) and assigned to this doctor.</summary>
+    public const string VisitAssigned = "visit_assigned";
+
     public static readonly IReadOnlyCollection<string> All =
     [
         AppointmentReminder, FollowUpDue, VaccinationDue, MedicationDue, LowStock, ExpiryWarning,
         RegistrationRequest, NegativeStock, AccountReadyForSettlement, EntitlementCredited, ReportDelivery,
+        VisitAssigned,
     ];
 }

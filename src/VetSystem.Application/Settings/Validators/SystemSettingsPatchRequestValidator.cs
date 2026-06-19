@@ -7,6 +7,13 @@ public sealed class SystemSettingsPatchRequestValidator : AbstractValidator<Syst
 {
     public SystemSettingsPatchRequestValidator()
     {
+        // A center must keep a name; when the rename field is supplied it has to be non-blank and ≤ 200
+        // chars (matches the platform-console provisioning bound on Environment.Name).
+        RuleFor(r => r.CenterName)
+            .Must(name => !string.IsNullOrWhiteSpace(name)).WithMessage("CenterName must not be empty.")
+            .MaximumLength(200).WithMessage("CenterName must be ≤ 200 characters.")
+            .When(r => r.CenterName is not null);
+
         RuleFor(r => r.DefaultExamFee!.Value)
             .GreaterThanOrEqualTo(0).WithMessage("DefaultExamFee must be ≥ 0.")
             .When(r => r.DefaultExamFee.HasValue);

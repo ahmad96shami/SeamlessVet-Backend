@@ -84,10 +84,8 @@ public sealed class UserAdminService
             throw new ConflictException("invalid_status", $"status '{status}' is not a valid user status.");
         }
 
-        if (role is not null && !RoleKey.All.Contains(role))
-        {
-            throw new ConflictException("invalid_role", $"role '{role}' is not a valid role key.");
-        }
+        // No RoleKey.All check: custom roles are valid filter values too. An unknown key simply
+        // matches no rows.
 
         var query = _db.Users
             .AsNoTracking()
@@ -174,12 +172,8 @@ public sealed class UserAdminService
     /// </summary>
     public async Task<UserResponse> CreateUserAsync(CreateUserRequest request, CancellationToken cancellationToken)
     {
-        if (!RoleKey.All.Contains(request.RoleKey))
-        {
-            throw new ConflictException("invalid_role", $"Role '{request.RoleKey}' is not a valid role key.");
-        }
-
-        // Env-scoped by the global query filter (the admin's JWT carries environment_id).
+        // Env-scoped by the global query filter (the admin's JWT carries environment_id). The DB lookup
+        // is the single source of truth for valid roles — built-in or admin-created custom roles.
         var role = await _db.Roles.FirstOrDefaultAsync(r => r.Key == request.RoleKey, cancellationToken)
             ?? throw new ConflictException("role_not_seeded", $"Role '{request.RoleKey}' is not seeded in this environment.");
 
@@ -210,6 +204,62 @@ public sealed class UserAdminService
 
         await EnsureFieldInventoryAsync(user, role.Key, cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
+
+        return new UserResponse(
+            user.Id,
+            user.FullName,
+            user.PhonePrimary,
+            user.Email,
+            role.Key,
+            role.Name,
+            user.Status,
+            user.NumberPrefix,
+            user.LicenseNumber,
+            user.CreatedAt);
+    }
+
+    /// <summary>
+    /// PATCH /admin/users/{id} — edit an existing user's profile and role. Enforces phone uniqueness,
+    /// validates the target role exists in this environment (built-in or custom), and — when the role
+    /// changes — provisions the field inventory for field roles and invalidates the user's permission
+    /// cache so the next request resolves the new role's permissions.
+    /// </summary>
+    public async Task<UserResponse> UpdateUserAsync(
+        Guid id, UpdateUserRequest request, CancellationToken cancellationToken)
+    {
+        var user = await LoadUserAsync(id, cancellationToken);
+
+        var role = await _db.Roles.FirstOrDefaultAsync(r => r.Key == request.RoleKey, cancellationToken)
+            ?? throw new ConflictException("role_not_seeded", $"Role '{request.RoleKey}' is not seeded in this environment.");
+
+        var phone = request.PhonePrimary.Trim();
+        if (phone != user.PhonePrimary
+            && await _db.Users.AnyAsync(u => u.PhonePrimary == phone && u.Id != id, cancellationToken))
+        {
+            throw new ConflictException("phone_in_use", "An account with this phone number already exists.");
+        }
+
+        var roleChanged = user.RoleId != role.Id;
+
+        user.FullName = request.FullName.Trim();
+        user.PhonePrimary = phone;
+        user.Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+        user.RoleId = role.Id;
+        user.LicenseNumber = request.LicenseNumber?.Trim();
+        user.LicenseDetails = request.LicenseDetails;
+
+        if (roleChanged)
+        {
+            // Provision the field "moving warehouse" if the user is now a field role (idempotent).
+            await EnsureFieldInventoryAsync(user, role.Key, cancellationToken);
+        }
+
+        await _db.SaveChangesAsync(cancellationToken);
+
+        if (roleChanged)
+        {
+            _permissionResolver.Invalidate(user.Id);
+        }
 
         return new UserResponse(
             user.Id,

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using VetSystem.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using VetSystem.Infrastructure.Persistence;
 namespace VetSystem.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260619175432_M36_EditableRoles")]
+    partial class M36_EditableRoles
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -2749,80 +2752,6 @@ namespace VetSystem.Infrastructure.Persistence.Migrations
                         {
                             t.HasCheckConstraint("ck_notifications_type", "type IN ('appointment_reminder','follow_up_due','vaccination_due','medication_due','low_stock','expiry_warning','registration_request','negative_stock','account_ready_for_settlement','entitlement_credited','report_delivery','visit_assigned')");
                         });
-                });
-
-            modelBuilder.Entity("VetSystem.Domain.Entities.OperatingExpense", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<decimal>("Amount")
-                        .HasColumnType("numeric(14,2)")
-                        .HasColumnName("amount");
-
-                    b.Property<string>("Category")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("character varying(32)")
-                        .HasColumnName("category");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<DateTimeOffset?>("DeletedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("deleted_at");
-
-                    b.Property<Guid>("EnvironmentId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("environment_id");
-
-                    b.Property<DateOnly>("IncurredOn")
-                        .HasColumnType("date")
-                        .HasColumnName("incurred_on");
-
-                    b.Property<string>("Note")
-                        .HasColumnType("text")
-                        .HasColumnName("note");
-
-                    b.Property<bool>("Paid")
-                        .HasColumnType("boolean")
-                        .HasColumnName("paid");
-
-                    b.Property<DateTimeOffset?>("PaidAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("paid_at");
-
-                    b.Property<Guid>("RecordedBy")
-                        .HasColumnType("uuid")
-                        .HasColumnName("recorded_by");
-
-                    b.Property<DateTimeOffset>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("updated_at");
-
-                    b.Property<uint>("Xmin")
-                        .IsConcurrencyToken()
-                        .ValueGeneratedOnAddOrUpdate()
-                        .HasColumnType("xid")
-                        .HasColumnName("xmin");
-
-                    b.HasKey("Id")
-                        .HasName("pk_operating_expenses");
-
-                    b.HasIndex("EnvironmentId", "DeletedAt")
-                        .HasDatabaseName("ix_operating_expenses_environment_id_deleted_at");
-
-                    b.HasIndex("EnvironmentId", "IncurredOn")
-                        .HasDatabaseName("ix_operating_expenses_incurred_on");
-
-                    b.HasIndex("EnvironmentId", "UpdatedAt")
-                        .HasDatabaseName("ix_operating_expenses_environment_id_updated_at");
-
-                    b.ToTable("operating_expenses", (string)null);
                 });
 
             modelBuilder.Entity("VetSystem.Domain.Entities.Partner", b =>

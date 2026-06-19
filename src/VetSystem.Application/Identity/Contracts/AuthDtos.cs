@@ -70,6 +70,19 @@ public sealed record CreateUserRequest(
     string? LicenseNumber,
     string? LicenseDetails);
 
+/// <summary>
+/// PATCH /admin/users/{id} body — edit an existing user's profile and role. Full-update semantics for
+/// the editable fields (the edit form posts them all); password is out of scope (separate reset flow).
+/// Changing <see cref="RoleKey"/> re-resolves the user's permissions on their next request.
+/// </summary>
+public sealed record UpdateUserRequest(
+    string FullName,
+    string PhonePrimary,
+    string? Email,
+    string RoleKey,
+    string? LicenseNumber,
+    string? LicenseDetails);
+
 public sealed record RegistrationRequestSummary(
     Guid Id,
     Guid UserId,

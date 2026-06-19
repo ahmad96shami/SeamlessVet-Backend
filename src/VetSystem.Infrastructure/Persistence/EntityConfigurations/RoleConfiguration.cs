@@ -14,9 +14,9 @@ internal sealed class RoleConfiguration : IEntityTypeConfiguration<Role>
         builder.Property(r => r.Key).HasColumnName("key").IsRequired().HasMaxLength(32);
         builder.Property(r => r.Name).HasColumnName("name").IsRequired().HasMaxLength(64);
 
-        builder.ToTable(t => t.HasCheckConstraint(
-            "ck_roles_key",
-            "key IN ('admin','accountant','vet_clinic','vet_field','vet_both','receptionist','cashier','inventory_staff')"));
+        // No ck_roles_key CHECK constraint: admins may create custom roles with generated keys
+        // (e.g. "custom_xxxxxxxx") beyond the eight built-in RoleKey values. The per-env unique
+        // index below still prevents duplicate keys within an environment.
 
         builder.HasIndex(r => new { r.EnvironmentId, r.Key })
             .HasDatabaseName("ux_roles_env_key")

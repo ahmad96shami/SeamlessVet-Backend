@@ -117,6 +117,7 @@ builder.Services.AddScoped<VetSystem.Application.Identity.INumberPrefixGenerator
     VetSystem.Infrastructure.Identity.NumberPrefixGenerator>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddScoped<UserAdminService>();
+builder.Services.AddScoped<VetSystem.API.Roles.RoleAdminService>();
 
 // M35 — platform identity (super-admin outside any tenant) + the minimal provisioning console.
 builder.Services.AddScoped<IPlatformTokenService, PlatformTokenService>();
@@ -199,6 +200,9 @@ builder.Services.AddScoped<VetSystem.API.DoctorPartners.DoctorPartnerPaymentsSer
 builder.Services.AddScoped<VetSystem.Application.EmployeeLedgers.IEmployeeLedgerService,
     VetSystem.Infrastructure.EmployeeLedgers.EmployeeLedgerService>();
 builder.Services.AddScoped<VetSystem.API.Employees.EmployeesService>();
+
+// Operating expenses (water/electricity/rent/…) — general costs that reduce net profit.
+builder.Services.AddScoped<VetSystem.API.OperatingExpenses.OperatingExpensesService>();
 builder.Services.AddScoped<VetSystem.API.Employees.EmployeePaymentsService>();
 
 // M8 — contracts & batches (lifecycle, per-medication pricing, supervision cycles)
@@ -270,6 +274,8 @@ builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.AccountRe
     VetSystem.API.Notifications.Handlers.AccountReadyForSettlementHandler>();
 builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.EntitlementCreditedEvent>,
     VetSystem.API.Notifications.Handlers.EntitlementCreditedHandler>();
+builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.VisitAssignedEvent>,
+    VetSystem.API.Notifications.Handlers.VisitAssignedHandler>();
 
 // Hangfire job classes — registered as services always so the recurring registration (real runs) and
 // the integration tests (forced clock, invoked directly) both resolve them from DI.

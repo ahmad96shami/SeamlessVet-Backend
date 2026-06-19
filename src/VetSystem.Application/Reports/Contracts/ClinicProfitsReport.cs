@@ -22,4 +22,16 @@ public sealed record ClinicProfitsReportResponse(
     decimal DistributedToPartners,
     decimal RetainedByClinic,
     IReadOnlyList<ProfitAllocation> PartnerAllocations,
-    decimal SettlementDiscounts = 0m); // M24 — تصفية discounts granted in the window (already netted out of Revenue)
+    decimal SettlementDiscounts = 0m, // M24 — تصفية discounts granted in the window (already netted out of Revenue)
+    // Operating expenses (water/electricity/rent/…) recognized in the window. NetOperatingProfit is the
+    // headline "صافي ربح المركز" the UI shows (gross margin minus operating expenses). The Payables*
+    // figures are a current snapshot of what the center owes others (as-of-now, independent of the
+    // window); NetAfterObligations = NetOperatingProfit − PayablesOutstanding is the bottom-line card.
+    decimal OperatingExpenses = 0m,
+    decimal NetOperatingProfit = 0m,
+    decimal PayablesSuppliers = 0m,
+    decimal PayablesDoctorPartners = 0m,
+    decimal PayablesEmployees = 0m,
+    decimal PayablesUnpaidExpenses = 0m,
+    decimal PayablesOutstanding = 0m,
+    decimal NetAfterObligations = 0m);
