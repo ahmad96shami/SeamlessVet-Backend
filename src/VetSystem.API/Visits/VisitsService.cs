@@ -90,7 +90,28 @@ public sealed class VisitsService
         var visit = await _db.Visits.AsNoTracking().FirstOrDefaultAsync(v => v.Id == id, cancellationToken)
                     ?? throw new NotFoundException("visit", id);
 
-        return _mapper.Map<VisitResponse>(visit);
+        return _mapper.Map<VisitResponse>(visit) with
+        {
+            CheckupFeeBilled = await IsCheckupFeeBilledAsync(visit.Id, cancellationToken),
+        };
+    }
+
+    /// <summary>
+    /// M23 — the visit's checkup fee is billed by either writer: a POS invoice line
+    /// (<c>invoice_items.checkup_fee_visit_id</c>) or the completion backstop's ledger entry
+    /// (<c>checkup-{visitId}</c>). Mirrors <see cref="BilledChargeGuard.EnsureCheckupFeeNotBilledAsync"/>.
+    /// </summary>
+    private async Task<bool> IsCheckupFeeBilledAsync(Guid visitId, CancellationToken cancellationToken)
+    {
+        if (await _db.InvoiceItems.AsNoTracking()
+                .AnyAsync(it => it.CheckupFeeVisitId == visitId, cancellationToken))
+        {
+            return true;
+        }
+
+        var key = $"checkup-{visitId}";
+        return await _db.LedgerEntries.AsNoTracking()
+            .AnyAsync(e => e.IdempotencyKey == key, cancellationToken);
     }
 
     public async Task<VisitResponse> CreateAsync(VisitCreateRequest request, CancellationToken cancellationToken)

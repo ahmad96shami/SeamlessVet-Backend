@@ -68,14 +68,18 @@ public sealed class NightStaysService
             .Take(Math.Clamp(take ?? 50, 1, MaxPageSize))
             .ToListAsync(cancellationToken);
 
-        return rows.Select(_mapper.Map<NightStayResponse>).ToList();
+        var billed = await LoadBilledStayIdsAsync(rows.Select(r => r.Id).ToList(), cancellationToken);
+        return rows
+            .Select(r => _mapper.Map<NightStayResponse>(r) with { Billed = billed.Contains(r.Id) })
+            .ToList();
     }
 
     public async Task<NightStayResponse> GetAsync(Guid id, CancellationToken cancellationToken)
     {
         var stay = await _db.NightStays.AsNoTracking().FirstOrDefaultAsync(n => n.Id == id, cancellationToken)
                    ?? throw new NotFoundException("night_stay", id);
-        return _mapper.Map<NightStayResponse>(stay);
+        var billed = await LoadBilledStayIdsAsync(new[] { stay.Id }, cancellationToken);
+        return _mapper.Map<NightStayResponse>(stay) with { Billed = billed.Contains(stay.Id) };
     }
 
     public async Task<NightStayResponse> CreateAsync(NightStayCreateRequest request, CancellationToken cancellationToken)
@@ -230,6 +234,43 @@ public sealed class NightStaysService
         {
             await PostChargeAsync(stay, visit, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// M23 — the subset of <paramref name="stayIds"/> already billed by either writer: a POS invoice
+    /// line (<c>invoice_items.night_stay_id</c>) or the completion backstop's ledger entry
+    /// (<c>night-stay-{id}</c>). Mirrors <see cref="BilledChargeGuard.EnsureNightStayNotBilledAsync"/>
+    /// exactly, so the response's <c>Billed</c> flag matches the freeze rule the UI must obey.
+    /// </summary>
+    private async Task<HashSet<Guid>> LoadBilledStayIdsAsync(
+        IReadOnlyCollection<Guid> stayIds, CancellationToken cancellationToken)
+    {
+        if (stayIds.Count == 0)
+        {
+            return new HashSet<Guid>();
+        }
+
+        var billed = (await _db.InvoiceItems.AsNoTracking()
+                .Where(it => it.NightStayId != null && stayIds.Contains(it.NightStayId!.Value))
+                .Select(it => it.NightStayId!.Value)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+
+        var keys = stayIds.Select(id => $"night-stay-{id}").ToList();
+        var billedKeys = (await _db.LedgerEntries.AsNoTracking()
+                .Where(e => keys.Contains(e.IdempotencyKey))
+                .Select(e => e.IdempotencyKey)
+                .ToListAsync(cancellationToken))
+            .ToHashSet();
+        foreach (var id in stayIds)
+        {
+            if (billedKeys.Contains($"night-stay-{id}"))
+            {
+                billed.Add(id);
+            }
+        }
+
+        return billed;
     }
 
     /// <summary>Recounts nights/total from the stay's current window + rate (closed stays only).</summary>

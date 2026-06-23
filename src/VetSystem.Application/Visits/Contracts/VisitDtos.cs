@@ -89,4 +89,10 @@ public sealed record VisitResponse(
     decimal? CheckupFeeApplied,
     Guid? FollowUpOfVisitId,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    // M23 — derived (not stored): the checkup fee is billed, via a POS invoice line back-link
+    // (invoice_items.checkup_fee_visit_id) OR the completion backstop (ledger key checkup-{visitId}).
+    // Mirrors BilledChargeGuard so the visit screen + POS show «مُفوترة» even when the backstop posted
+    // it. Default false so Mapster's map stays valid; only GetAsync computes the real value (the list
+    // doesn't surface it, so it stays cheap — no N+1).
+    bool CheckupFeeBilled = false);

@@ -41,4 +41,9 @@ public sealed record NightStayResponse(
     decimal Total,
     string? Notes,
     DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    // M23 — derived (not stored): the boarding charge is billed, via a POS invoice line back-link
+    // OR the visit-completion ledger backstop (key night-stay-{id}). Mirrors BilledChargeGuard so the
+    // UI can show «مُفوترة» + a lock even when the backstop (not the till) posted the charge. Default
+    // false so Mapster's entity→DTO map and any positional construction stay valid; List/Get override it.
+    bool Billed = false);

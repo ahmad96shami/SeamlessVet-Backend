@@ -267,6 +267,48 @@ public sealed class NightStayAndCheckupFeeTests
         secondVisit.GetProperty("checkupFeeApplied").GetDecimal().Should().Be(30m, "only one free follow-up per origin");
     }
 
+    [Fact]
+    public async Task BilledFlags_SurfaceBackstopState_OnVisitAndNightStayResponses()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        (await PatchAsync(client, "/admin/settings", new { defaultCheckupFee = 30m, nightStayRateMedical = 50m }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var customerId = await CreateCustomerAsync(client);
+        var visitId = await CreateInClinicVisitAsync(client, customerId, admin.Id, farmId: null);
+
+        var stayId = Guid.CreateVersion7();
+        (await PostAsync(client, "/night-stays", new
+        {
+            id = stayId, visitId, careType = "medical", checkInAt = "2026-06-01T06:00:00Z",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-03T06:00:00Z" }))
+            .StatusCode.Should().Be(HttpStatusCode.OK); // 2 × 50, closed-unbilled
+
+        // Before either writer touches the charge the derived flags read false.
+        (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
+            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeFalse();
+        (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
+            .GetProperty("billed").GetBoolean().Should().BeFalse();
+
+        // Completion (no invoice) bills both via the backstop — only the ledger-key writer fires,
+        // so this is exactly the case the invoice-back-link derivation alone would miss (Gap B).
+        (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
+            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeTrue("the backstop posted the checkup fee");
+        (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
+            .GetProperty("billed").GetBoolean().Should().BeTrue("the backstop posted the boarding charge");
+
+        // The list endpoint (which drives the night-stays tab + POS) carries the same derived state.
+        (await client.GetFromJsonAsync<JsonElement>($"/night-stays/?visitId={visitId}"))
+            .EnumerateArray().Single().GetProperty("billed").GetBoolean().Should().BeTrue();
+    }
+
     // ---- helpers ----
 
     private static HttpClient AuthedClient(VetApiFactory factory, User admin)
