@@ -280,6 +280,7 @@ builder.Services.AddScoped<IDomainEventHandler<VetSystem.Domain.Events.VisitAssi
 // Hangfire job classes — registered as services always so the recurring registration (real runs) and
 // the integration tests (forced clock, invoked directly) both resolve them from DI.
 builder.Services.AddScoped<VetSystem.API.Jobs.VaccinationRemindersJob>();
+builder.Services.AddScoped<VetSystem.API.Jobs.AppointmentRemindersJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.MedicationDueJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.LowStockAlertsJob>();
 builder.Services.AddScoped<VetSystem.API.Jobs.ExpirationWarningsJob>();
@@ -562,6 +563,10 @@ if (hangfireEnabled)
     // iterate every environment internally, so one schedule covers the whole instance.
     RecurringJob.AddOrUpdate<VetSystem.API.Jobs.VaccinationRemindersJob>(
         "vaccination-reminders", j => j.RunAsync(CancellationToken.None), "0 7 * * *");
+    // Appointments are intraday, so this scan runs every 15 minutes (the lead-time absorbs the cadence
+    // latency); it reminds the responsible doctor of bookings entering the configured lead window.
+    RecurringJob.AddOrUpdate<VetSystem.API.Jobs.AppointmentRemindersJob>(
+        "appointment-reminders", j => j.RunAsync(CancellationToken.None), "*/15 * * * *");
     // Doses are intraday, so this scan runs every 5 minutes (the lead-time absorbs the cadence latency)
     // rather than daily like the vaccination reminder it otherwise mirrors.
     RecurringJob.AddOrUpdate<VetSystem.API.Jobs.MedicationDueJob>(

@@ -26,8 +26,12 @@ public sealed record SystemSettingsResponse(
     decimal NightStayRateIcu,
     decimal NightStayRateHotel,
     int NightStayCheckoutHour,
-    // M18 — default medication-reminder lead-time (minutes before a dose), surfaced from the `extra` bag.
+    // Reminder lead-times surfaced from the `extra` bag for the Admin UI (M18 medication; vaccination +
+    // appointment added with the per-reminder Settings section). Medication/appointment are minutes
+    // before the dose/appointment; vaccination is days before the due date.
     int MedicationReminderLeadMinutes,
+    int VaccinationReminderLeadDays,
+    int AppointmentReminderLeadMinutes,
     DateTimeOffset UpdatedAt);
 
 /// <summary>
@@ -53,4 +57,6 @@ public sealed record SystemSettingsPatchRequest(
     decimal? NightStayRateIcu,
     decimal? NightStayRateHotel,
     int? NightStayCheckoutHour,
-    int? MedicationReminderLeadMinutes);
+    int? MedicationReminderLeadMinutes,
+    int? VaccinationReminderLeadDays,
+    int? AppointmentReminderLeadMinutes);

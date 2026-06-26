@@ -43,6 +43,32 @@ public sealed class VaccinationRemindersJobTests
         notifications[0].Payload.Should().Contain("VaccinationId");
     }
 
+    [Fact]
+    public async Task Fires_for_pet_only_vaccination_via_owners_assigned_doctor()
+    {
+        // A pet-linked vaccination with no visit and no customerId (the standalone "specific pet" path):
+        // before the recipient fallback it resolved no doctor and was silently dropped.
+        var dueDate = new DateOnly(2031, 5, 9);
+        var forcedNow = new DateTimeOffset(dueDate.ToDateTime(new TimeOnly(7, 0)), TimeSpan.Zero);
+
+        await using var scope = await PgTestScope.CreateAsync();
+        await AdminTestSeed.SeedAdminAsync(scope);
+        var doctorId = await SeedPetOnlyDueVaccinationAsync(scope, dueDate);
+
+        await using var factory = new VetApiFactory { Clock = new FakeClock(forcedNow) };
+        await RunJobAsync(factory);
+
+        await using var db = scope.CreateDbContext(new FakeCurrentUser { EnvironmentId = scope.EnvironmentId });
+        var notifications = await db.Notifications
+            .IgnoreQueryFilters()
+            .Where(n => n.EnvironmentId == scope.EnvironmentId
+                        && n.Type == NotificationType.VaccinationDue
+                        && n.UserId == doctorId)
+            .ToListAsync();
+
+        notifications.Should().HaveCount(1, "a pet-only vaccination resolves the recipient through the pet's owner");
+    }
+
     private static async Task RunJobAsync(VetApiFactory factory)
     {
         using var serviceScope = factory.Services.CreateScope();
@@ -82,6 +108,57 @@ public sealed class VaccinationRemindersJobTests
         {
             EnvironmentId = scope.EnvironmentId,
             CustomerId = customer.Id,
+            VaccineType = "rabies",
+            DateGiven = dueDate.AddYears(-1),
+            NextDueDate = dueDate,
+        });
+
+        await db.SaveChangesAsync();
+        return doctor.Id;
+    }
+
+    /// <summary>Seeds a doctor + a customer that owns a pet, plus a vaccination linked ONLY to the pet
+    /// (no visit, no customerId). Returns the owner's assigned-doctor id (the expected recipient).</summary>
+    private static async Task<Guid> SeedPetOnlyDueVaccinationAsync(PgTestScope scope, DateOnly dueDate)
+    {
+        await using var db = scope.CreateDbContext(new FakeCurrentUser { EnvironmentId = scope.EnvironmentId });
+
+        var role = await db.Roles.IgnoreQueryFilters()
+            .FirstAsync(r => r.EnvironmentId == scope.EnvironmentId && r.Key == RoleKey.VetClinic);
+
+        var doctor = new User
+        {
+            EnvironmentId = scope.EnvironmentId,
+            RoleId = role.Id,
+            FullName = "Pet Owner Doctor",
+            PhonePrimary = $"+9705{Guid.NewGuid().ToString("N")[..8]}",
+            PasswordHash = "x",
+            Status = UserStatus.Active,
+            NumberPrefix = $"P{Guid.NewGuid().ToString("N")[..4].ToUpperInvariant()}",
+        };
+        db.Users.Add(doctor);
+
+        var customer = new Customer
+        {
+            EnvironmentId = scope.EnvironmentId,
+            Type = CustomerType.ClinicCustomer,
+            FullName = "Pet Owner",
+            AssignedDoctorId = doctor.Id,
+        };
+        db.Customers.Add(customer);
+
+        var pet = new Pet
+        {
+            EnvironmentId = scope.EnvironmentId,
+            CustomerId = customer.Id,
+            Name = "Rex",
+        };
+        db.Pets.Add(pet);
+
+        db.Vaccinations.Add(new Vaccination
+        {
+            EnvironmentId = scope.EnvironmentId,
+            PetId = pet.Id, // pet-only: no customerId, no visitId
             VaccineType = "rabies",
             DateGiven = dueDate.AddYears(-1),
             NextDueDate = dueDate,

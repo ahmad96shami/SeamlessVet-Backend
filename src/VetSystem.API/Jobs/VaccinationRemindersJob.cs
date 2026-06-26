@@ -1,28 +1,38 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using VetSystem.API.Notifications;
 using VetSystem.Application.Common;
 using VetSystem.Application.Notifications;
+using VetSystem.Application.Settings;
 using VetSystem.Domain.Entities;
 using VetSystem.Infrastructure.Persistence;
 
 namespace VetSystem.API.Jobs;
 
 /// <summary>
-/// M11 task 9 — daily scan of <c>vaccinations.next_due_date</c>. For every vaccination due <i>today</i>
-/// (per the injected clock), notifies the responsible doctor (the visit's doctor, else the customer's
-/// assigned doctor) that a vaccination is due (PRD §6.7, §9). Idempotent within a day: a vaccination
-/// already notified today is skipped, so a manual re-run won't double-send.
+/// M11 task 9 — daily scan of <c>vaccinations.next_due_date</c>. For every vaccination whose due date
+/// is the configured lead-time ahead (<c>vaccinationReminder.leadDays</c> in <c>system_settings.extra</c>;
+/// 0 = on the day itself), notifies the responsible doctor that a vaccination is due (PRD §6.7, §9).
+/// The recipient resolves through the visit's doctor → the customer's assigned doctor → the pet owner's
+/// assigned doctor, and falls back to the environment's admins so a due reminder is <b>never silently
+/// dropped</b>. Idempotent within a day: a vaccination already notified today is skipped, so a manual
+/// re-run won't double-send.
 /// </summary>
 public sealed class VaccinationRemindersJob
 {
     private readonly ApplicationDbContext _db;
     private readonly INotificationDispatcher _dispatcher;
+    private readonly NotificationRecipientResolver _recipients;
     private readonly IClock _clock;
 
-    public VaccinationRemindersJob(ApplicationDbContext db, INotificationDispatcher dispatcher, IClock clock)
+    public VaccinationRemindersJob(
+        ApplicationDbContext db,
+        INotificationDispatcher dispatcher,
+        NotificationRecipientResolver recipients,
+        IClock clock)
     {
         _db = db;
         _dispatcher = dispatcher;
+        _recipients = recipients;
         _clock = clock;
     }
 
@@ -33,10 +43,15 @@ public sealed class VaccinationRemindersJob
 
         foreach (var environmentId in await JobHelpers.ActiveEnvironmentIdsAsync(_db, cancellationToken))
         {
+            // Fire `leadDays` ahead of the due date (0 = on the day). The target date is what the scan
+            // matches, so a vaccination due on X is reminded on X − leadDays.
+            var leadDays = await LeadDaysAsync(environmentId, cancellationToken);
+            var targetDate = today.AddDays(leadDays);
+
             var due = await _db.Vaccinations
                 .IgnoreQueryFilters()
-                .Where(v => v.EnvironmentId == environmentId && v.DeletedAt == null && v.NextDueDate == today)
-                .Select(v => new { v.Id, v.VisitId, v.CustomerId, v.VaccineType, v.NextDueDate })
+                .Where(v => v.EnvironmentId == environmentId && v.DeletedAt == null && v.NextDueDate == targetDate)
+                .Select(v => new { v.Id, v.VisitId, v.CustomerId, v.PetId, v.VaccineType, v.NextDueDate })
                 .ToListAsync(cancellationToken);
 
             if (due.Count == 0)
@@ -53,7 +68,7 @@ public sealed class VaccinationRemindersJob
                 .ToListAsync(cancellationToken);
 
             var alreadyNotified = notifiedPayloads
-                .Select(p => TryReadGuid(p, "VaccinationId"))
+                .Select(p => JobHelpers.TryReadPayloadGuid(p, "VaccinationId"))
                 .Where(id => id.HasValue)
                 .Select(id => id!.Value)
                 .ToHashSet();
@@ -84,7 +99,29 @@ public sealed class VaccinationRemindersJob
                         .FirstOrDefaultAsync(cancellationToken);
                 }
 
-                if (doctorId is not { } recipient)
+                // A pet-only vaccination (no visit, no customer) resolves through its owner — without this
+                // the standalone "specific pet" path produced a vaccination with no recipient and was
+                // silently dropped.
+                if (doctorId is null && vaccination.PetId is { } petId)
+                {
+                    doctorId = await _db.Pets
+                        .IgnoreQueryFilters()
+                        .Where(p => p.Id == petId)
+                        .Join(
+                            _db.Customers.IgnoreQueryFilters(),
+                            p => p.CustomerId,
+                            c => c.Id,
+                            (_, c) => c.AssignedDoctorId)
+                        .FirstOrDefaultAsync(cancellationToken);
+                }
+
+                // Never silently drop a due reminder: if no doctor resolves (e.g. the owner has no
+                // assigned doctor), fall back to the environment's admins so someone is notified.
+                IReadOnlyCollection<Guid> recipients = doctorId is { } recipient
+                    ? [recipient]
+                    : await _recipients.AdminsAsync(environmentId, cancellationToken);
+
+                if (recipients.Count == 0)
                 {
                     continue;
                 }
@@ -92,15 +129,16 @@ public sealed class VaccinationRemindersJob
                 await _dispatcher.DispatchAsync(
                     new NotificationDispatch(
                         environmentId,
-                        [recipient],
+                        recipients,
                         NotificationType.VaccinationDue,
-                        Title: "تطعيم مستحق اليوم",
+                        Title: "تطعيم مستحق",
                         Body: $"يوجد تطعيم ({vaccination.VaccineType}) مستحق بتاريخ {vaccination.NextDueDate:yyyy-MM-dd}.",
                         Payload: new
                         {
                             VaccinationId = vaccination.Id,
                             vaccination.VisitId,
                             vaccination.CustomerId,
+                            vaccination.PetId,
                             vaccination.VaccineType,
                             vaccination.NextDueDate,
                         }),
@@ -109,26 +147,18 @@ public sealed class VaccinationRemindersJob
         }
     }
 
-    private static Guid? TryReadGuid(string? json, string property)
+    /// <summary>
+    /// The configured "fire X days before due" lead (<c>vaccinationReminder.leadDays</c> in the
+    /// <c>system_settings.extra</c> bag); 0 (the default) means remind on the due date itself.
+    /// </summary>
+    private async Task<int> LeadDaysAsync(Guid environmentId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(json))
-        {
-            return null;
-        }
+        var extra = await _db.SystemSettings
+            .IgnoreQueryFilters()
+            .Where(s => s.EnvironmentId == environmentId)
+            .Select(s => s.Extra)
+            .FirstOrDefaultAsync(cancellationToken);
 
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            if (doc.RootElement.TryGetProperty(property, out var element) && element.TryGetGuid(out var value))
-            {
-                return value;
-            }
-        }
-        catch (JsonException)
-        {
-            // A malformed payload should never break the scan.
-        }
-
-        return null;
+        return VaccinationReminderSettings.FromExtra(extra).LeadDays;
     }
 }

@@ -84,6 +84,22 @@ public sealed class SystemSettingsAdminService
             entity.Extra = updated.WriteInto(entity.Extra);
         }
 
+        // Vaccination-reminder lead (days before the due date) merges into the same `extra` bag.
+        if (request.VaccinationReminderLeadDays.HasValue)
+        {
+            var current = VaccinationReminderSettings.FromExtra(entity.Extra);
+            var updated = current with { LeadDays = request.VaccinationReminderLeadDays.Value };
+            entity.Extra = updated.WriteInto(entity.Extra);
+        }
+
+        // Appointment-reminder lead (minutes before the appointment) merges into the same `extra` bag.
+        if (request.AppointmentReminderLeadMinutes.HasValue)
+        {
+            var current = AppointmentReminderSettings.FromExtra(entity.Extra);
+            var updated = current with { LeadMinutes = request.AppointmentReminderLeadMinutes.Value };
+            entity.Extra = updated.WriteInto(entity.Extra);
+        }
+
         await _db.SaveChangesAsync(cancellationToken);
         return ToResponse(entity, await LoadCenterNameAsync(cancellationToken));
     }
@@ -93,6 +109,8 @@ public sealed class SystemSettingsAdminService
     {
         var ns = NightStaySettings.FromExtra(entity.Extra);
         var mr = MedicationReminderSettings.FromExtra(entity.Extra);
+        var vr = VaccinationReminderSettings.FromExtra(entity.Extra);
+        var ar = AppointmentReminderSettings.FromExtra(entity.Extra);
         return _mapper.Map<SystemSettingsResponse>(entity) with
         {
             CenterName = centerName,
@@ -101,6 +119,8 @@ public sealed class SystemSettingsAdminService
             NightStayRateHotel = ns.RateHotel,
             NightStayCheckoutHour = ns.CheckoutHour,
             MedicationReminderLeadMinutes = mr.DefaultLeadMinutes,
+            VaccinationReminderLeadDays = vr.LeadDays,
+            AppointmentReminderLeadMinutes = ar.LeadMinutes,
         };
     }
 

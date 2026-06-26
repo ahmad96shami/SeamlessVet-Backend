@@ -42,6 +42,14 @@ public sealed class SystemSettingsPatchRequestValidator : AbstractValidator<Syst
             .GreaterThanOrEqualTo(0).WithMessage("MedicationReminderLeadMinutes must be ≥ 0.")
             .When(r => r.MedicationReminderLeadMinutes.HasValue);
 
+        RuleFor(r => r.VaccinationReminderLeadDays!.Value)
+            .InclusiveBetween(0, 365).WithMessage("VaccinationReminderLeadDays must be in 0–365.")
+            .When(r => r.VaccinationReminderLeadDays.HasValue);
+
+        RuleFor(r => r.AppointmentReminderLeadMinutes!.Value)
+            .InclusiveBetween(0, 10080).WithMessage("AppointmentReminderLeadMinutes must be in 0–10080 (≤ 7 days).")
+            .When(r => r.AppointmentReminderLeadMinutes.HasValue);
+
         RuleFor(r => r.LowStockThresholdPct!.Value)
             .InclusiveBetween(0m, 100m).WithMessage("LowStockThresholdPct must be in 0–100.")
             .When(r => r.LowStockThresholdPct.HasValue);
