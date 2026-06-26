@@ -33,6 +33,13 @@ public sealed class NightStay : Entity
     /// <summary><see cref="NightsCount"/> × <see cref="NightlyRate"/> — the billed total.</summary>
     public decimal Total { get; set; }
 
+    /// <summary>
+    /// The intended discharge hour (0–23), recorded when the stay is opened. Informational only — the
+    /// nights count is still computed at close against the clinic-wide checkout hour, so this never
+    /// affects billing. Null = unrecorded.
+    /// </summary>
+    public int? ExitHour { get; set; }
+
     public string? Notes { get; set; }
 }
 

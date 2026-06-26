@@ -2,8 +2,6 @@ using MapsterMapper;
 using Microsoft.EntityFrameworkCore;
 using VetSystem.API.Financial;
 using VetSystem.Application.Common;
-using VetSystem.Application.Ledgers;
-using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Application.NightStays.Contracts;
 using VetSystem.Application.Settings;
 using VetSystem.Domain.Common;
@@ -18,11 +16,11 @@ namespace VetSystem.API.NightStays;
 /// <c>system_settings</c> by care type at creation. Closing the stay (<see cref="CloseAsync"/>) only
 /// <b>records</b> the checkout and counts nights hotel-style via <see cref="NightStayChargeCalculator"/>
 /// — M23 decoupled billing from close. The charge is collected on the invoice rail (a closed stay
-/// auto-assembles into the visit's POS invoice, back-linked via <c>invoice_items.night_stay_id</c>),
-/// with the visit-completion backstop (<see cref="CloseAndPostUnbilledForVisitAsync"/>) posting a
-/// <c>night_stay</c> ledger entry for whatever never reached the till (idempotent
-/// <c>night-stay-{id}</c>). Until billed by either writer a stay — open or closed — can be edited,
-/// re-closed (recompute), or deleted; once billed it is frozen (<see cref="BilledChargeGuard"/>).
+/// auto-assembles into the visit's POS invoice, back-linked via <c>invoice_items.night_stay_id</c>);
+/// visit completion never posts to the ledger — it only auto-closes a still-open stay
+/// (<see cref="CloseOpenForVisitAsync"/>) so the POS can bill it. Until billed by an invoice line a
+/// stay — open or closed — can be edited, re-closed (recompute), or deleted; once billed it is
+/// frozen (<see cref="BilledChargeGuard"/>).
 /// </summary>
 public sealed class NightStaysService
 {
@@ -37,23 +35,17 @@ public sealed class NightStaysService
     private readonly ICurrentUserAccessor _currentUser;
     private readonly IMapper _mapper;
     private readonly IClock _clock;
-    private readonly ILedgerService _ledgers;
-    private readonly IOwnerLedgerResolver _ownerLedger;
 
     public NightStaysService(
         ApplicationDbContext db,
         ICurrentUserAccessor currentUser,
         IMapper mapper,
-        IClock clock,
-        ILedgerService ledgers,
-        IOwnerLedgerResolver ownerLedger)
+        IClock clock)
     {
         _db = db;
         _currentUser = currentUser;
         _mapper = mapper;
         _clock = clock;
-        _ledgers = ledgers;
-        _ownerLedger = ownerLedger;
     }
 
     public async Task<IReadOnlyList<NightStayResponse>> ListAsync(
@@ -116,6 +108,7 @@ public sealed class NightStaysService
             NightsCount = 0,
             NightlyRate = Money(rate),
             Total = 0m,
+            ExitHour = request.ExitHour,
             Notes = request.Notes,
         };
 
@@ -140,6 +133,8 @@ public sealed class NightStaysService
         if (request.CareType is not null) stay.CareType = request.CareType;
         if (request.CheckInAt is { } checkIn) stay.CheckInAt = checkIn;
         if (request.NightlyRate is { } nr) stay.NightlyRate = Money(nr);
+        // Exit hour is informational (never bills), so it stays editable even on a closed/billed stay.
+        if (request.ExitHour is { } eh) stay.ExitHour = eh;
         if (request.Notes is not null) stay.Notes = request.Notes;
 
         if (billingEdit && stay.CheckOutAt is not null)
@@ -152,8 +147,8 @@ public sealed class NightStaysService
     }
 
     /// <summary>
-    /// Records the checkout and computes nights/total — M23: no charge posts here (billing moved to
-    /// the invoice rail / completion backstop). A replayed close (no explicit checkout) of an
+    /// Records the checkout and computes nights/total — M23: no charge posts here (billing happens
+    /// on the POS invoice rail). A replayed close (no explicit checkout) of an
     /// already-closed stay is an idempotent no-op; a close with an <b>explicit</b> checkout on a
     /// closed-unbilled stay deliberately re-closes it (recompute) — that's how a mistaken checkout
     /// is corrected before billing.
@@ -200,39 +195,24 @@ public sealed class NightStaysService
     }
 
     /// <summary>
-    /// M23 completion backstop — called by <c>VisitsService.CloseAsync</c> inside its transaction
-    /// (shared scoped DbContext). Auto-closes any still-open stay (checkout = now) and posts the
-    /// <c>night_stay</c> ledger entry for every stay not already billed by an invoice line. The
-    /// ledger key (<c>night-stay-{id}</c>) absorbs replays.
+    /// Called by <c>VisitsService.CloseAsync</c> when a visit completes (shared scoped DbContext):
+    /// auto-closes any still-open stay (checkout = now) so its nights/total freeze and it becomes
+    /// billable on the POS invoice rail. M23/bugfix — completion posts NOTHING to the ledger;
+    /// boarding charges are collected exclusively through the POS. Mutates tracked entities; the
+    /// caller's <c>SaveChangesAsync</c> persists them.
     /// </summary>
-    public async Task CloseAndPostUnbilledForVisitAsync(Visit visit, CancellationToken cancellationToken)
+    public async Task CloseOpenForVisitAsync(Visit visit, CancellationToken cancellationToken)
     {
-        var stays = await _db.NightStays.Where(n => n.VisitId == visit.Id).ToListAsync(cancellationToken);
-        if (stays.Count == 0)
-        {
-            return;
-        }
+        var openStays = await _db.NightStays
+            .Where(n => n.VisitId == visit.Id && n.CheckOutAt == null)
+            .ToListAsync(cancellationToken);
 
-        foreach (var stay in stays.Where(s => s.CheckOutAt is null))
+        foreach (var stay in openStays)
         {
-            // No invalid-window rejection here: a completion minutes after check-in is legitimate
-            // (the calculator clamps to 0 nights and PostChargeAsync skips zero totals).
+            // No invalid-window rejection: a completion minutes after check-in is legitimate
+            // (the calculator clamps to 0 nights — a zero-night stay simply has nothing to bill).
             stay.CheckOutAt = Max(_clock.UtcNow, stay.CheckInAt);
             await RecomputeClosedTotalsAsync(stay, cancellationToken);
-        }
-
-        await _db.SaveChangesAsync(cancellationToken);
-
-        var stayIds = stays.Select(s => s.Id).ToList();
-        var billedOnInvoice = (await _db.InvoiceItems.AsNoTracking()
-                .Where(it => it.NightStayId != null && stayIds.Contains(it.NightStayId!.Value))
-                .Select(it => it.NightStayId!.Value)
-                .ToListAsync(cancellationToken))
-            .ToHashSet();
-
-        foreach (var stay in stays.Where(s => !billedOnInvoice.Contains(s.Id)))
-        {
-            await PostChargeAsync(stay, visit, cancellationToken);
         }
     }
 
@@ -290,33 +270,6 @@ public sealed class NightStaysService
     }
 
     private static DateTimeOffset Max(DateTimeOffset a, DateTimeOffset b) => a >= b ? a : b;
-
-    /// <summary>Posts the boarding charge to the visit's owner ledger (M16 routing). Skips a zero total.</summary>
-    private async Task PostChargeAsync(NightStay stay, Visit visit, CancellationToken cancellationToken)
-    {
-        if (stay.Total <= 0m)
-        {
-            return; // zero nights or a zero rate — nothing to bill
-        }
-
-        var ledgerId = await _ownerLedger.ResolveAsync(visit.CustomerId, visit.FarmId, cancellationToken);
-        if (ledgerId is not { } lid)
-        {
-            return; // defensive: a clinic visit always has a customer, so this never trips
-        }
-
-        await _ledgers.AppendEntryAsync(
-            new LedgerEntryRequest(
-                Id: null,
-                LedgerId: lid,
-                EntryType: LedgerEntryType.NightStay,
-                Amount: stay.Total,
-                InvoiceId: null,
-                ReceiptVoucherId: null,
-                Description: $"Night stay ({stay.CareType}) × {stay.NightsCount}",
-                IdempotencyKey: $"night-stay-{stay.Id}"),
-            cancellationToken);
-    }
 
     private async Task<NightStaySettings> LoadNightStaySettingsAsync(Guid envId, CancellationToken cancellationToken)
     {

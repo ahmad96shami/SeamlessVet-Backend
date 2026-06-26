@@ -13,17 +13,19 @@ public sealed record NightStayCreateRequest(
     string CareType,
     DateTimeOffset? CheckInAt,
     decimal? NightlyRate,
+    int? ExitHour,
     string? Notes);
 
 /// <summary>
 /// Partial edit of an <b>open</b> stay. Billing-affecting fields (<see cref="CareType"/>,
 /// <see cref="CheckInAt"/>, <see cref="NightlyRate"/>) are rejected once the stay is closed/charged
-/// (append-only money); notes stay editable.
+/// (append-only money); notes + the intended exit hour stay editable (the latter never bills).
 /// </summary>
 public sealed record NightStayPatchRequest(
     string? CareType,
     DateTimeOffset? CheckInAt,
     decimal? NightlyRate,
+    int? ExitHour,
     string? Notes);
 
 /// <summary>Closes a stay and bills <c>nights × nightly_rate</c>. <c>CheckOutAt</c> defaults to now.</summary>
@@ -39,6 +41,7 @@ public sealed record NightStayResponse(
     int NightsCount,
     decimal NightlyRate,
     decimal Total,
+    int? ExitHour,
     string? Notes,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,

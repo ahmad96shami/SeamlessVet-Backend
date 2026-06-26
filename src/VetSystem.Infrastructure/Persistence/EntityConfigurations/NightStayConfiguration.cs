@@ -18,6 +18,7 @@ internal sealed class NightStayConfiguration : IEntityTypeConfiguration<NightSta
         builder.Property(n => n.NightsCount).HasColumnName("nights_count");
         builder.Property(n => n.NightlyRate).HasColumnName("nightly_rate").HasColumnType("numeric(14,2)");
         builder.Property(n => n.Total).HasColumnName("total").HasColumnType("numeric(14,2)");
+        builder.Property(n => n.ExitHour).HasColumnName("exit_hour");
         builder.Property(n => n.Notes).HasColumnName("notes");
 
         builder.ToTable(t => t.HasCheckConstraint(

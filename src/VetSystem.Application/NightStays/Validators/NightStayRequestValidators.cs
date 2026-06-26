@@ -13,6 +13,8 @@ public sealed class NightStayCreateRequestValidator : AbstractValidator<NightSta
             .Must(CareType.All.Contains)
             .WithMessage($"CareType must be one of: {string.Join(", ", CareType.All)}.");
         RuleFor(r => r.NightlyRate!.Value).GreaterThanOrEqualTo(0).When(r => r.NightlyRate.HasValue);
+        RuleFor(r => r.ExitHour!.Value).InclusiveBetween(0, 23)
+            .WithMessage("ExitHour must be in 0–23.").When(r => r.ExitHour.HasValue);
     }
 }
 
@@ -25,5 +27,7 @@ public sealed class NightStayPatchRequestValidator : AbstractValidator<NightStay
             .WithMessage($"CareType must be one of: {string.Join(", ", CareType.All)}.")
             .When(r => r.CareType is not null);
         RuleFor(r => r.NightlyRate!.Value).GreaterThanOrEqualTo(0).When(r => r.NightlyRate.HasValue);
+        RuleFor(r => r.ExitHour!.Value).InclusiveBetween(0, 23)
+            .WithMessage("ExitHour must be in 0–23.").When(r => r.ExitHour.HasValue);
     }
 }
