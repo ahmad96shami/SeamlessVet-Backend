@@ -13,18 +13,17 @@ using VetSystem.Tests.Infrastructure;
 namespace VetSystem.Tests.Visits;
 
 /// <summary>
-/// M17 task 10 / reworked for M23 — night-stays (مبيت) + the in-clinic checkup fee + the
-/// free-follow-up waiver, end to end through the API. M23 decoupled billing from stay-close: close
-/// only records checkout + nights; the charge bills on the invoice rail, with the visit-completion
-/// <b>backstop</b> posting <c>nights × rate</c> to the right (farm vs customer) ledger (M16
-/// routing) for whatever never reached the till. Until billed a stay can be edited / re-closed /
-/// deleted; the backstop also auto-closes a still-open stay.
+/// M17 task 10 / reworked for M23 + the no-backstop bugfix — night-stays (مبيت), the in-clinic
+/// checkup fee, and the free-follow-up waiver, end to end through the API. Close only records
+/// checkout + nights; <b>visit completion posts NOTHING to the ledger</b> — care charges bill
+/// exclusively through the POS invoice rail. Completion still auto-closes a still-open stay (so the
+/// POS can bill it). Until an invoice line bills it, a stay can be edited / re-closed / deleted.
 /// </summary>
 [Trait("Category", "Integration")]
 public sealed class NightStayAndCheckupFeeTests
 {
     [Fact]
-    public async Task NightStay_CloseRecordsOnly_CompletionBackstopBillsFarmLedger()
+    public async Task NightStay_CloseRecordsOnly_CompletionPostsNothing()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -61,7 +60,7 @@ public sealed class NightStayAndCheckupFeeTests
 
         await using (var db = NewContext(scope, admin.Id))
         {
-            // M23 — closing records the checkout; nothing bills until the invoice rail or the backstop.
+            // Closing records the checkout; nothing bills until the POS invoice rail.
             (await db.LedgerEntries.AsNoTracking().CountAsync(e => e.EntryType == LedgerEntryType.NightStay))
                 .Should().Be(0, "close no longer posts the charge");
         }
@@ -70,22 +69,22 @@ public sealed class NightStayAndCheckupFeeTests
 
         await using (var db = NewContext(scope, admin.Id))
         {
+            // Completion must add NOTHING to any balance — the boarding charge is collected only via POS.
+            (await db.LedgerEntries.AsNoTracking().CountAsync(e => e.EntryType == LedgerEntryType.NightStay))
+                .Should().Be(0, "completion never posts the boarding charge");
+
             var farmBalance = await db.Ledgers.AsNoTracking()
                 .Where(l => l.FarmId == farmId).Select(l => l.Balance).SingleAsync();
-            farmBalance.Should().Be(100m, "the completion backstop routes the boarding charge to the farm ledger");
+            farmBalance.Should().Be(0m, "completion adds nothing to the farm ledger");
 
-            var entry = await db.LedgerEntries.AsNoTracking()
-                .Where(e => e.EntryType == LedgerEntryType.NightStay)
-                .SingleAsync();
-            entry.Amount.Should().Be(100m);
             var ownBalance = await db.Ledgers.AsNoTracking()
                 .Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync();
-            ownBalance.Should().Be(0m, "nothing posts to the customer's own ledger for a farm-scoped stay");
+            ownBalance.Should().Be(0m, "completion adds nothing to the customer ledger either");
         }
     }
 
     [Fact]
-    public async Task NightStay_ReCloseRecomputes_BackstopPostsOnce_ThenBilledStayFreezes()
+    public async Task NightStay_ReCloseRecomputes_CompletionPostsNothing_UnbilledStayStaysEditable()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -125,23 +124,22 @@ public sealed class NightStayAndCheckupFeeTests
 
         await using (var db = NewContext(scope, admin.Id))
         {
+            // Completion posts nothing — the 4 × 30 charge is collected only when the POS bills it.
             var ownBalance = await db.Ledgers.AsNoTracking()
                 .Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync();
-            ownBalance.Should().Be(120m, "4 nights × 30, posted once by the backstop");
+            ownBalance.Should().Be(0m, "completion never posts the boarding charge");
             (await db.LedgerEntries.AsNoTracking().CountAsync(e => e.EntryType == LedgerEntryType.NightStay))
-                .Should().Be(1);
+                .Should().Be(0);
         }
 
-        // Billed (backstop ledger key) → the stay is frozen on every write path.
-        var patchBilled = await PatchAsync(client, $"/night-stays/{stayId}", new { nightlyRate = 99m });
-        patchBilled.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await ErrorCodeAsync(patchBilled)).Should().Be("night_stay_billed");
-        var deleteBilled = await DeleteAsync(client, $"/night-stays/{stayId}");
-        deleteBilled.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await ErrorCodeAsync(deleteBilled)).Should().Be("night_stay_billed");
-        var recloseBilled = await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-06T06:00:00Z" });
-        recloseBilled.StatusCode.Should().Be(HttpStatusCode.Conflict, "re-closing a billed stay would desync the posted charge");
-        (await ErrorCodeAsync(recloseBilled)).Should().Be("night_stay_billed");
+        // Unbilled (no invoice line, no ledger entry) → the stay is still fully editable/deletable
+        // even after completion: the cashier can adjust it before ringing it up on the POS.
+        var patched = await (await PatchAsync(client, $"/night-stays/{stayId}", new { nightlyRate = 40m }))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        patched.GetProperty("total").GetDecimal().Should().Be(160m, "4 nights × the new 40 rate, recomputed");
+
+        (await DeleteAsync(client, $"/night-stays/{stayId}")).IsSuccessStatusCode.Should()
+            .BeTrue("an unbilled stay can be removed");
     }
 
     [Fact]
@@ -181,7 +179,7 @@ public sealed class NightStayAndCheckupFeeTests
     }
 
     [Fact]
-    public async Task NightStay_OpenAtCompletion_AutoClosesAndBackstopPosts()
+    public async Task NightStay_OpenAtCompletion_AutoCloses_ButPostsNothing()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -204,7 +202,7 @@ public sealed class NightStayAndCheckupFeeTests
         })).StatusCode.Should().Be(HttpStatusCode.OK);
 
         // The stay is never closed by staff — completing the visit auto-closes it (checkout = now)
-        // and the backstop posts the charge.
+        // so the nights/total freeze and the POS can bill it. Completion itself posts nothing.
         (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         var stay = await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}");
@@ -212,14 +210,14 @@ public sealed class NightStayAndCheckupFeeTests
         stay.GetProperty("nightsCount").GetInt32().Should().BeGreaterThanOrEqualTo(2);
 
         await using var db = NewContext(scope, admin.Id);
-        var entry = await db.LedgerEntries.AsNoTracking()
-            .Where(e => e.EntryType == LedgerEntryType.NightStay)
-            .SingleAsync();
-        entry.Amount.Should().BeGreaterThanOrEqualTo(60m, "≥ 2 nights × 30");
+        (await db.LedgerEntries.AsNoTracking().CountAsync(e => e.EntryType == LedgerEntryType.NightStay))
+            .Should().Be(0, "auto-close freezes the nights, but completion bills nothing");
+        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
+            .Should().Be(0m, "the customer balance is untouched until the stay is billed on the POS");
     }
 
     [Fact]
-    public async Task CheckupFee_AutoApplied_PostsOnCompletion_AndWaivedOncePerFollowUpOrigin()
+    public async Task CheckupFee_AutoApplied_NotPostedOnCompletion_AndWaivedOncePerFollowUpOrigin()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -236,29 +234,30 @@ public sealed class NightStayAndCheckupFeeTests
         var origin = await client.GetFromJsonAsync<JsonElement>($"/visits/{originVisitId}");
         origin.GetProperty("checkupFeeApplied").GetDecimal().Should().Be(30m);
 
-        // Completing it posts the checkup fee to the customer ledger.
+        // Completing it must NOT post the checkup fee — it is collected only when the POS bills it.
         (await PostAsync(client, $"/visits/{originVisitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         await using (var db = NewContext(scope, admin.Id))
         {
             (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
-                .Should().Be(30m);
+                .Should().Be(0m, "completion never posts the checkup fee");
             (await db.LedgerEntries.AsNoTracking().CountAsync(e => e.EntryType == LedgerEntryType.CheckupFee))
-                .Should().Be(1);
+                .Should().Be(0);
         }
 
-        // The first follow-up of this origin waives the checkup fee.
+        // The first follow-up of this origin waives the checkup fee (the fee amount itself is unchanged
+        // by the no-backstop fix — only where it gets billed changed).
         var firstFollowVisit = await ScheduleAndAttendFollowUpAsync(client, originVisitId, admin.Id, "2026-07-01T09:00:00Z");
         var firstVisit = await client.GetFromJsonAsync<JsonElement>($"/visits/{firstFollowVisit}");
         firstVisit.GetProperty("checkupFeeApplied").GetDecimal().Should().Be(0m, "the one free follow-up waives the fee");
         firstVisit.GetProperty("followUpOfVisitId").GetGuid().Should().Be(originVisitId);
 
-        // Completing the waived follow-up posts no checkup fee.
+        // Completing the waived follow-up posts nothing (fee 0) either.
         (await PostAsync(client, $"/visits/{firstFollowVisit}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
         await using (var db = NewContext(scope, admin.Id))
         {
             (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
-                .Should().Be(30m, "the waived follow-up adds nothing");
+                .Should().Be(0m, "the waived follow-up adds nothing");
         }
 
         // A second follow-up of the same origin is charged the normal fee (free one used).
@@ -268,7 +267,7 @@ public sealed class NightStayAndCheckupFeeTests
     }
 
     [Fact]
-    public async Task BilledFlags_SurfaceBackstopState_OnVisitAndNightStayResponses()
+    public async Task BilledFlags_StayFalseThroughCompletion_NoBackstop()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -289,24 +288,24 @@ public sealed class NightStayAndCheckupFeeTests
         (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-03T06:00:00Z" }))
             .StatusCode.Should().Be(HttpStatusCode.OK); // 2 × 50, closed-unbilled
 
-        // Before either writer touches the charge the derived flags read false.
+        // Before any invoice line bills them the derived flags read false.
         (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
             .GetProperty("checkupFeeBilled").GetBoolean().Should().BeFalse();
         (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
             .GetProperty("billed").GetBoolean().Should().BeFalse();
 
-        // Completion (no invoice) bills both via the backstop — only the ledger-key writer fires,
-        // so this is exactly the case the invoice-back-link derivation alone would miss (Gap B).
+        // Completion no longer bills anything — with the backstop gone, the flags stay FALSE so the
+        // POS still offers both care charges as billable (not greyed «مُفوترة») lines.
         (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
-            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeTrue("the backstop posted the checkup fee");
+            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeFalse("completion bills nothing — POS still collects it");
         (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
-            .GetProperty("billed").GetBoolean().Should().BeTrue("the backstop posted the boarding charge");
+            .GetProperty("billed").GetBoolean().Should().BeFalse("completion bills nothing — POS still collects it");
 
         // The list endpoint (which drives the night-stays tab + POS) carries the same derived state.
         (await client.GetFromJsonAsync<JsonElement>($"/night-stays/?visitId={visitId}"))
-            .EnumerateArray().Single().GetProperty("billed").GetBoolean().Should().BeTrue();
+            .EnumerateArray().Single().GetProperty("billed").GetBoolean().Should().BeFalse();
     }
 
     // ---- helpers ----

@@ -759,7 +759,7 @@ public sealed class InvoicesIntegrationTests
     }
 
     [Fact]
-    public async Task CompletionBackstop_ThenPos_NeverDoubleCharges()
+    public async Task CompletedVisit_PostsNothing_ThenPosBillsCareCharges()
     {
         await using var scope = await PgTestScope.CreateAsync();
         var admin = await AdminTestSeed.SeedAdminAsync(scope);
@@ -777,51 +777,65 @@ public sealed class InvoicesIntegrationTests
         (await PostAsync(client, $"/night-stays/{stayId}/close", new { checkOutAt = "2026-06-02T06:00:00Z" }))
             .StatusCode.Should().Be(HttpStatusCode.OK); // 1 night
 
-        // The visit never reaches the till — completion backstops both charges to the ledger.
+        // The visit never reaches the till before completion. Completion must post NOTHING — care
+        // charges are billed exclusively through the POS, never auto-added to the balance.
         (await PostAsync(client, $"/visits/{visitId}/complete", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         await using (var db = NewContext(scope, admin.Id))
         {
+            (await db.LedgerEntries.AsNoTracking().CountAsync(e =>
+                    e.EntryType == LedgerEntryType.CheckupFee || e.EntryType == LedgerEntryType.NightStay))
+                .Should().Be(0, "completion posts no care-charge ledger entries");
             (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
-                .Should().Be(110m, "30 checkup + 1 × 80 night");
+                .Should().Be(0m, "the customer balance is untouched by completion");
         }
 
-        // A later POS ring-up of the (completed) visit finds nothing to bill…
-        var emptyId = Guid.CreateVersion7();
+        // Derived flags read false → the POS offers both as billable (not greyed «مُفوترة») lines.
+        (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
+            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeFalse();
+        (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
+            .GetProperty("billed").GetBoolean().Should().BeFalse();
+
+        // A POS ring-up of the COMPLETED visit assembles + bills both care charges.
+        var invoiceId = Guid.CreateVersion7();
         (await PostAsync(client, "/pos/invoices", new
         {
-            id = emptyId, customerId, visitId, discountAmount = 0m,
+            id = invoiceId, customerId, visitId, discountAmount = 0m,
             items = Array.Empty<object>(), payments = Array.Empty<object>(),
-            idempotencyKey = $"after-{emptyId:N}",
-        })).StatusCode.Should().Be(HttpStatusCode.Conflict);
+            idempotencyKey = $"after-{invoiceId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // …and explicit back-links are rejected against the backstop's ledger keys.
-        var feeId = Guid.CreateVersion7();
-        var feeResp = await PostAsync(client, "/pos/invoices", new
+        await using (var db = NewContext(scope, admin.Id))
         {
-            id = feeId, customerId, visitId, discountAmount = 0m,
-            items = new object[] { new { checkupFeeVisitId = visitId, quantity = 1m, unitPrice = 30m } },
-            payments = Array.Empty<object>(),
-            idempotencyKey = $"after2-{feeId:N}",
-        });
-        feeResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await ErrorCodeAsync(feeResp)).Should().Be("checkup_fee_already_billed");
+            var items = await db.InvoiceItems.AsNoTracking().Where(it => it.InvoiceId == invoiceId).ToListAsync();
+            items.Should().Contain(it => it.CheckupFeeVisitId == visitId);
+            items.Should().Contain(it => it.NightStayId == stayId);
+            (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
+                .Should().Be(110m, "now billed via the invoice: 30 fee + 1 × 80 night, unpaid");
+        }
 
-        var stayLineId = Guid.CreateVersion7();
-        var stayResp = await PostAsync(client, "/pos/invoices", new
-        {
-            id = stayLineId, customerId, visitId, discountAmount = 0m,
-            items = new object[] { new { nightStayId = stayId, quantity = 1m, unitPrice = 80m } },
-            payments = Array.Empty<object>(),
-            idempotencyKey = $"after3-{stayLineId:N}",
-        });
-        stayResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await ErrorCodeAsync(stayResp)).Should().Be("night_stay_already_billed");
+        // Now billed by the invoice line, the flags flip true and the stay freezes.
+        (await client.GetFromJsonAsync<JsonElement>($"/visits/{visitId}"))
+            .GetProperty("checkupFeeBilled").GetBoolean().Should().BeTrue();
+        (await client.GetFromJsonAsync<JsonElement>($"/night-stays/{stayId}"))
+            .GetProperty("billed").GetBoolean().Should().BeTrue();
 
-        // The backstopped fee is frozen on the visit too.
-        var patchResp = await SendAsync(client, HttpMethod.Patch, $"/visits/{visitId}", new { checkupFeeApplied = 50m });
+        var patchResp = await SendAsync(client, HttpMethod.Patch, $"/night-stays/{stayId}", new { nightlyRate = 99m });
         patchResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        (await ErrorCodeAsync(patchResp)).Should().Be("visit_locked"); // terminal visit; the fee guard backs non-terminal edits
+        (await ErrorCodeAsync(patchResp)).Should().Be("night_stay_billed");
+
+        var deleteResp = await SendAsync(client, HttpMethod.Delete, $"/night-stays/{stayId}", null);
+        deleteResp.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await ErrorCodeAsync(deleteResp)).Should().Be("night_stay_billed");
+
+        // A second ring-up of the now fully-billed visit has nothing left.
+        var secondId = Guid.CreateVersion7();
+        (await PostAsync(client, "/pos/invoices", new
+        {
+            id = secondId, customerId, visitId, discountAmount = 0m,
+            items = Array.Empty<object>(), payments = Array.Empty<object>(),
+            idempotencyKey = $"after2-{secondId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.Conflict);
     }
 
     [Fact]
@@ -862,7 +876,7 @@ public sealed class InvoicesIntegrationTests
         await using var db = NewContext(scope, admin.Id);
         (await db.LedgerEntries.AsNoTracking().CountAsync(e =>
                 e.EntryType == LedgerEntryType.CheckupFee || e.EntryType == LedgerEntryType.NightStay))
-            .Should().Be(0, "the invoice billed both charges; the completion backstop must post nothing");
+            .Should().Be(0, "the invoice billed both charges; completion posts nothing");
         (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Balance).SingleAsync())
             .Should().Be(190m, "one invoice entry: 30 fee + 2 × 80 nights, unpaid");
     }

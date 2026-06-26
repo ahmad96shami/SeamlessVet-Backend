@@ -3,8 +3,6 @@ using Microsoft.EntityFrameworkCore;
 using VetSystem.API.Financial;
 using VetSystem.API.NightStays;
 using VetSystem.Application.Common;
-using VetSystem.Application.Ledgers;
-using VetSystem.Application.Ledgers.Contracts;
 using VetSystem.Application.Visits;
 using VetSystem.Application.Visits.Contracts;
 using VetSystem.Domain.Common;
@@ -31,8 +29,6 @@ public sealed class VisitsService
     private readonly IClock _clock;
     private readonly IVisitNumberValidator _visitNumbers;
     private readonly IVisitNumberGenerator _visitNumberGen;
-    private readonly ILedgerService _ledgers;
-    private readonly IOwnerLedgerResolver _ownerLedger;
     private readonly NightStaysService _nightStays;
     private readonly IDomainEventPublisher _events;
 
@@ -43,8 +39,6 @@ public sealed class VisitsService
         IClock clock,
         IVisitNumberValidator visitNumbers,
         IVisitNumberGenerator visitNumberGen,
-        ILedgerService ledgers,
-        IOwnerLedgerResolver ownerLedger,
         NightStaysService nightStays,
         IDomainEventPublisher events)
     {
@@ -54,8 +48,6 @@ public sealed class VisitsService
         _clock = clock;
         _visitNumbers = visitNumbers;
         _visitNumberGen = visitNumberGen;
-        _ledgers = ledgers;
-        _ownerLedger = ownerLedger;
         _nightStays = nightStays;
         _events = events;
     }
@@ -309,45 +301,19 @@ public sealed class VisitsService
                 $"Cannot transition a visit from '{visit.Status}' to '{target}'.");
         }
 
-        // M23 — the fee is chargeable only if the exam actually started (بدء الكشف); a visit
-        // completed straight from open never confirmed it. Captured before the overwrite below.
-        var wasStarted = visit.Status == VisitStatus.InProgress;
-
         visit.Status = target;
         visit.EndedAt = _clock.UtcNow;
 
-        if (target != VisitStatus.Completed)
+        // Completing a visit posts NOTHING to the customer/farm ledger: the checkup fee (رسوم الكشف)
+        // and night stays (مبيت) are billed exclusively through the POS invoice rail. We still
+        // auto-close any still-open night stay (checkout = now) so its nights/total freeze and it
+        // becomes billable in the POS; cancellation closes and bills nothing.
+        if (target == VisitStatus.Completed && visit.VisitType == VisitType.InClinic)
         {
-            await _db.SaveChangesAsync(cancellationToken); // cancellation bills nothing
-            return _mapper.Map<VisitResponse>(visit);
+            await _nightStays.CloseOpenForVisitAsync(visit, cancellationToken);
         }
 
-        // M23 completion backstop — post whatever the invoice rail never billed: the checkup fee
-        // and the visit's night stays (auto-closing open ones). The visit-row lock serializes this
-        // against a concurrent POS issuance (which locks the same row): the two writers use
-        // DIFFERENT idempotency stores (invoice back-links vs checkup-/night-stay- ledger keys),
-        // so without the lock both could pass their exclusion checks and double-charge
-        // (SCHEMA invariant #10).
-        await using var tx = await _db.Database.BeginTransactionAsync(cancellationToken);
-        await _db.Database.ExecuteSqlAsync($"SELECT id FROM visits WHERE id = {visit.Id} FOR UPDATE", cancellationToken);
         await _db.SaveChangesAsync(cancellationToken);
-
-        var postCheckup = visit.VisitType == VisitType.InClinic
-                          && wasStarted
-                          && visit.CheckupFeeApplied is > 0m
-                          && !await _db.InvoiceItems.AsNoTracking()
-                              .AnyAsync(it => it.CheckupFeeVisitId == visit.Id, cancellationToken);
-        if (postCheckup)
-        {
-            await PostCheckupFeeAsync(visit, cancellationToken); // checkup-{visitId} absorbs replays
-        }
-
-        if (visit.VisitType == VisitType.InClinic)
-        {
-            await _nightStays.CloseAndPostUnbilledForVisitAsync(visit, cancellationToken);
-        }
-
-        await tx.CommitAsync(cancellationToken);
         return _mapper.Map<VisitResponse>(visit);
     }
 
@@ -366,27 +332,6 @@ public sealed class VisitsService
         return await _db.SystemSettings.AsNoTracking()
             .Select(s => (decimal?)s.DefaultCheckupFee)
             .FirstOrDefaultAsync(cancellationToken) ?? 0m;
-    }
-
-    private async Task PostCheckupFeeAsync(Visit visit, CancellationToken cancellationToken)
-    {
-        var ledgerId = await _ownerLedger.ResolveAsync(visit.CustomerId, visit.FarmId, cancellationToken);
-        if (ledgerId is not { } lid)
-        {
-            return; // defensive: an in-clinic visit always has a customer, so this never trips
-        }
-
-        await _ledgers.AppendEntryAsync(
-            new LedgerEntryRequest(
-                Id: null,
-                LedgerId: lid,
-                EntryType: LedgerEntryType.CheckupFee,
-                Amount: Math.Round(visit.CheckupFeeApplied!.Value, 2, MidpointRounding.AwayFromZero),
-                InvoiceId: null,
-                ReceiptVoucherId: null,
-                Description: visit.VisitNumber is null ? "Checkup fee" : $"Checkup fee — visit {visit.VisitNumber}",
-                IdempotencyKey: $"checkup-{visit.Id}"),
-            cancellationToken);
     }
 
     private void RequireEnvironment()
