@@ -17,7 +17,8 @@ public sealed record PetRequest(
     decimal? WeightLatest,
     string? PhotoUrl,
     string? MicrochipNo,
-    string? HealthNotes);
+    string? HealthNotes,
+    bool? IsNeutered);
 
 public sealed record PetPatchRequest(
     string? Name,
@@ -29,7 +30,8 @@ public sealed record PetPatchRequest(
     decimal? WeightLatest,
     string? PhotoUrl,
     string? MicrochipNo,
-    string? HealthNotes);
+    string? HealthNotes,
+    bool? IsNeutered);
 
 public sealed record PetTransferRequest(Guid TargetCustomerId);
 
@@ -46,5 +48,6 @@ public sealed record PetResponse(
     string? PhotoUrl,
     string? MicrochipNo,
     string? HealthNotes,
+    bool? IsNeutered,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);

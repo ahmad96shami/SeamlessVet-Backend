@@ -99,6 +99,7 @@ public sealed class PetsService
             PhotoUrl = request.PhotoUrl,
             MicrochipNo = request.MicrochipNo,
             HealthNotes = request.HealthNotes,
+            IsNeutered = request.IsNeutered,
         };
 
         _db.Pets.Add(entity);
@@ -125,6 +126,7 @@ public sealed class PetsService
         if (request.PhotoUrl is not null) entity.PhotoUrl = request.PhotoUrl;
         if (request.MicrochipNo is not null) entity.MicrochipNo = request.MicrochipNo;
         if (request.HealthNotes is not null) entity.HealthNotes = request.HealthNotes;
+        if (request.IsNeutered.HasValue) entity.IsNeutered = request.IsNeutered;
 
         await _db.SaveChangesAsync(cancellationToken);
         return _mapper.Map<PetResponse>(entity);

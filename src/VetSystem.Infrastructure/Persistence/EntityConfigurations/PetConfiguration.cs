@@ -23,6 +23,7 @@ internal sealed class PetConfiguration : IEntityTypeConfiguration<Pet>
         builder.Property(p => p.PhotoUrl).HasColumnName("photo_url");
         builder.Property(p => p.MicrochipNo).HasColumnName("microchip_no").HasMaxLength(64);
         builder.Property(p => p.HealthNotes).HasColumnName("health_notes");
+        builder.Property(p => p.IsNeutered).HasColumnName("is_neutered");
 
         builder.HasOne<Customer>()
             .WithMany()

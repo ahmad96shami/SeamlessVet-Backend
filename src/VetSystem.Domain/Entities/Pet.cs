@@ -35,6 +35,9 @@ public sealed class Pet : Entity
     public string? MicrochipNo { get; set; }
 
     public string? HealthNotes { get; set; }
+
+    /// <summary>Spayed/castrated (معقم/مخصي). Null = unrecorded.</summary>
+    public bool? IsNeutered { get; set; }
 }
 
 public static class PetSex
