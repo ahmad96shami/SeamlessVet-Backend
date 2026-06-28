@@ -21,7 +21,7 @@ internal sealed class EmployeeLedgerEntryConfiguration : IEntityTypeConfiguratio
 
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_employee_ledger_entries_type",
-            "entry_type IN ('salary_accrual','salary_payment','loan','loan_repayment','adjustment')"));
+            "entry_type IN ('salary_accrual','salary_payment','loan','loan_repayment','adjustment','deduction')"));
 
         // Append-only dedupe: UNIQUE per environment so a retried write — including the monthly accrual's
         // period key (salary-accrual-{employeeId}-{yyyyMM}) — collapses to one row.

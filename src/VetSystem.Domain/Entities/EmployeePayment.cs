@@ -57,5 +57,9 @@ public static class EmployeePaymentKind
     /// <summary>A direct cash loan repayment by the employee.</summary>
     public const string LoanRepayment = "loan_repayment";
 
-    public static readonly IReadOnlyCollection<string> All = [SalaryPayment, Loan, LoanRepayment];
+    /// <summary>A deduction (خصم) withheld from the employee — a fine/penalty/correction that
+    /// reduces the payable (drives the balance down), independent of any loan.</summary>
+    public const string Deduction = "deduction";
+
+    public static readonly IReadOnlyCollection<string> All = [SalaryPayment, Loan, LoanRepayment, Deduction];
 }

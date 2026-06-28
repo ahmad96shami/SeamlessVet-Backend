@@ -25,7 +25,7 @@ internal sealed class EmployeePaymentConfiguration : IEntityTypeConfiguration<Em
         builder.Property(p => p.IdempotencyKey).HasColumnName("idempotency_key").IsRequired().HasMaxLength(128);
 
         builder.ToTable(t => t.HasCheckConstraint(
-            "ck_employee_payments_kind", "kind IN ('salary_payment','loan','loan_repayment')"));
+            "ck_employee_payments_kind", "kind IN ('salary_payment','loan','loan_repayment','deduction')"));
         builder.ToTable(t => t.HasCheckConstraint(
             "ck_employee_payments_method", "method IN ('cash','card','bank_transfer','cheque')"));
 

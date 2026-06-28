@@ -118,6 +118,8 @@ public sealed class EmployeePaymentsService
             EmployeePaymentKind.SalaryPayment => (EmployeeLedgerEntryType.SalaryPayment, -payment.Amount),
             EmployeePaymentKind.Loan => (EmployeeLedgerEntryType.Loan, -payment.Amount),
             EmployeePaymentKind.LoanRepayment => (EmployeeLedgerEntryType.LoanRepayment, payment.Amount),
+            // خصم — a deduction debits the payable (mirrors the salary_payment / loan sign).
+            EmployeePaymentKind.Deduction => (EmployeeLedgerEntryType.Deduction, -payment.Amount),
             _ => throw new ConflictException("invalid_employee_payment_kind", $"Unknown kind '{request.Kind}'."),
         };
 
@@ -171,6 +173,7 @@ public sealed class EmployeePaymentsService
         EmployeePaymentKind.SalaryPayment => "Salary payment",
         EmployeePaymentKind.Loan => "Employee loan",
         EmployeePaymentKind.LoanRepayment => "Loan repayment",
+        EmployeePaymentKind.Deduction => "Deduction",
         _ => "Employee payment",
     };
 

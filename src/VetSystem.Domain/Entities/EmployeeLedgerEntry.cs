@@ -46,6 +46,9 @@ public static class EmployeeLedgerEntryType
     /// <summary>Manual correction — signed either way.</summary>
     public const string Adjustment = "adjustment";
 
+    /// <summary>A deduction (خصم) withheld from the employee — reduces the payable.</summary>
+    public const string Deduction = "deduction";
+
     public static readonly IReadOnlyCollection<string> All =
-        [SalaryAccrual, SalaryPayment, Loan, LoanRepayment, Adjustment];
+        [SalaryAccrual, SalaryPayment, Loan, LoanRepayment, Adjustment, Deduction];
 }

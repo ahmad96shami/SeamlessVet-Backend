@@ -103,6 +103,33 @@ public sealed class EmployeesIntegrationTests
     }
 
     [Fact]
+    public async Task Deduction_DebitsBalance()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var employeeId = await CreateEmployeeAsync(client, NewEmployee(monthlySalary: 1000m));
+
+        var deductionId = Guid.CreateVersion7();
+        (await PostAsync(client, $"/employees/{employeeId}/payments", new
+        {
+            id = deductionId,
+            kind = "deduction",
+            amount = 150m,
+            method = "cash",
+            idempotencyKey = $"ep-{deductionId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        await using var db = NewContext(scope, admin.Id);
+        var entry = await db.EmployeeLedgerEntries.AsNoTracking().SingleAsync(e => e.EmployeePaymentId == deductionId);
+        entry.EntryType.Should().Be(EmployeeLedgerEntryType.Deduction);
+        entry.Amount.Should().Be(-150m, "a خصم/deduction reduces the payable");
+        (await BalanceAsync(db, employeeId)).Should().Be(-150m);
+    }
+
+    [Fact]
     public async Task FutureSalaryDeduction_Pairing_NetsToZero()
     {
         await using var scope = await PgTestScope.CreateAsync();
