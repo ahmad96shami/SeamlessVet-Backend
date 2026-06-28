@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using VetSystem.Infrastructure.Persistence;
@@ -11,9 +12,11 @@ using VetSystem.Infrastructure.Persistence;
 namespace VetSystem.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    partial class ApplicationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260628094118_ProductBarcodeLiveUniqueIndex")]
+    partial class ProductBarcodeLiveUniqueIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -3553,7 +3556,8 @@ namespace VetSystem.Infrastructure.Persistence.Migrations
                         .HasName("pk_products");
 
                     b.HasIndex("EnvironmentId", "Barcode")
-                        .HasDatabaseName("ix_products_env_barcode")
+                        .IsUnique()
+                        .HasDatabaseName("ux_products_env_barcode")
                         .HasFilter("barcode IS NOT NULL AND deleted_at IS NULL");
 
                     b.HasIndex("EnvironmentId", "DeletedAt")

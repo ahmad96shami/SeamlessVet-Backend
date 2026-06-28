@@ -28,9 +28,11 @@ internal sealed class ProductConfiguration : IEntityTypeConfiguration<Product>
             "ck_products_category",
             "category IN ('medication','product','vaccine')"));
 
+        // Barcodes are intentionally NON-unique: the same code may be shared by several products
+        // (the POS resolves a scan to every match and lets the cashier pick). This is a plain lookup
+        // index over LIVE, barcoded rows (the POS/admin barcode searches), not a uniqueness constraint.
         builder.HasIndex(p => new { p.EnvironmentId, p.Barcode })
-            .HasDatabaseName("ux_products_env_barcode")
-            .IsUnique()
-            .HasFilter("barcode IS NOT NULL");
+            .HasDatabaseName("ix_products_env_barcode")
+            .HasFilter("barcode IS NOT NULL AND deleted_at IS NULL");
     }
 }

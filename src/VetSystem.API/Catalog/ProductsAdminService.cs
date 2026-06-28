@@ -94,7 +94,7 @@ public sealed class ProductsAdminService
             Id = request.Id ?? Guid.Empty,
             NameAr = request.NameAr,
             NameLatin = request.NameLatin,
-            Barcode = request.Barcode,
+            Barcode = NormalizeBarcode(request.Barcode),
             Category = request.Category,
             Manufacturer = request.Manufacturer,
             Supplier = request.Supplier,
@@ -107,15 +107,7 @@ public sealed class ProductsAdminService
         };
 
         _db.Products.Add(entity);
-
-        try
-        {
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException ex) when (IsBarcodeViolation(ex))
-        {
-            throw new ConflictException("product_barcode_taken", "A product with this barcode already exists.");
-        }
+        await _db.SaveChangesAsync(cancellationToken);
 
         return _mapper.Map<ProductResponse>(entity);
     }
@@ -130,7 +122,7 @@ public sealed class ProductsAdminService
 
         if (request.NameAr is not null) entity.NameAr = request.NameAr;
         if (request.NameLatin is not null) entity.NameLatin = request.NameLatin;
-        if (request.Barcode is not null) entity.Barcode = request.Barcode;
+        if (request.Barcode is not null) entity.Barcode = NormalizeBarcode(request.Barcode);
         if (request.Category is not null) entity.Category = request.Category;
         if (request.Manufacturer is not null) entity.Manufacturer = request.Manufacturer;
         if (request.Supplier is not null) entity.Supplier = request.Supplier;
@@ -141,14 +133,7 @@ public sealed class ProductsAdminService
         if (request.ReorderPoint.HasValue) entity.ReorderPoint = request.ReorderPoint.Value;
         if (request.IsConsumable.HasValue) entity.IsConsumable = request.IsConsumable.Value;
 
-        try
-        {
-            await _db.SaveChangesAsync(cancellationToken);
-        }
-        catch (DbUpdateException ex) when (IsBarcodeViolation(ex))
-        {
-            throw new ConflictException("product_barcode_taken", "A product with this barcode already exists.");
-        }
+        await _db.SaveChangesAsync(cancellationToken);
 
         return _mapper.Map<ProductResponse>(entity);
     }
@@ -171,8 +156,12 @@ public sealed class ProductsAdminService
         }
     }
 
-    private static bool IsBarcodeViolation(DbUpdateException ex) =>
-        ex.InnerException is Npgsql.PostgresException pg
-        && pg.SqlState == "23505"
-        && pg.ConstraintName == "ux_products_env_barcode";
+    /// <summary>
+    /// Collapse a blank/whitespace barcode to <c>null</c> and trim the rest, so an "empty" barcode is
+    /// stored as NULL (no barcode) rather than "", and a scanned code with stray whitespace still
+    /// exact-matches the stored value at the POS register. Barcodes are intentionally NOT unique — the
+    /// same code may be shared by several products (POS shows all matches to choose from).
+    /// </summary>
+    private static string? NormalizeBarcode(string? barcode) =>
+        string.IsNullOrWhiteSpace(barcode) ? null : barcode.Trim();
 }
