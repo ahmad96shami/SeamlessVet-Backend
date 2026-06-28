@@ -30,20 +30,21 @@ public sealed class EntitlementSettlementIntegrationTests
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var batchId = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
+        var (batchId, farmId) = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
-        // Field sale linked to the batch, paid in full → the ledger nets to zero.
+        // Field sale linked to the batch, paid in full → the farm ledger nets to zero.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("cash", 250m)]);
 
         // Closing the batch is a plain status flip (no entitlement compute, M30).
         (await PatchAsync(client, $"/batches/{batchId}", new { status = "closed" })).StatusCode.Should().Be(HttpStatusCode.OK);
 
-        // Close the account → the ledger is finalized, but no entitlement is computed/released.
-        (await PostAsync(client, $"/customers/{customerId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
+        // Close the farm account (the batch runs on a farm → its charges land on the farm ledger) →
+        // the ledger is finalized, but no entitlement is computed/released.
+        (await PostAsync(client, $"/farms/{farmId}/close-account", null)).StatusCode.Should().Be(HttpStatusCode.OK);
 
         await using var db = NewContext(scope, admin.Id);
-        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
+        (await db.Ledgers.AsNoTracking().Where(l => l.FarmId == farmId).Select(l => l.Status).SingleAsync())
             .Should().Be(LedgerStatus.Closed);
         (await db.DoctorEntitlements.AsNoTracking().AnyAsync(e => e.BatchId == batchId))
             .Should().BeFalse("entitlements are computed at settlement, not at batch/account close");
@@ -59,18 +60,18 @@ public sealed class EntitlementSettlementIntegrationTests
         using var client = AuthedClient(factory, admin);
 
         var customerId = await CreateCustomerAsync(client);
-        var batchId = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
+        var (batchId, farmId) = await CreateBatchAsync(client, customerId, admin.Id, feeModel: FeeModel.FixedAmount, feeValue: 20m);
 
-        // Sold on credit → the ledger carries a debt.
+        // Sold on credit → the farm ledger carries a debt.
         await IssueFieldInvoiceAsync(client, customerId, admin.Id, batchId, productId, quantity: 10m,
             payments: [("credit", 250m)]);
 
-        var rejected = await PostAsync(client, $"/customers/{customerId}/close-account", null);
+        var rejected = await PostAsync(client, $"/farms/{farmId}/close-account", null);
         rejected.StatusCode.Should().Be(HttpStatusCode.Conflict, "a non-zero balance cannot be closed");
         (await rejected.Content.ReadAsStringAsync()).Should().Contain("account_not_settled");
 
         await using var db = NewContext(scope, admin.Id);
-        (await db.Ledgers.AsNoTracking().Where(l => l.CustomerId == customerId).Select(l => l.Status).SingleAsync())
+        (await db.Ledgers.AsNoTracking().Where(l => l.FarmId == farmId).Select(l => l.Status).SingleAsync())
             .Should().NotBe(LedgerStatus.Closed);
     }
 
@@ -161,14 +162,21 @@ public sealed class EntitlementSettlementIntegrationTests
         return customerId;
     }
 
-    private static async Task<Guid> CreateBatchAsync(
+    private static async Task<(Guid BatchId, Guid FarmId)> CreateBatchAsync(
         HttpClient client, Guid customerId, Guid doctorId, string feeModel, decimal feeValue)
     {
+        var farmId = Guid.CreateVersion7();
+        (await PostAsync(client, "/farms", new
+        {
+            id = farmId, customerId, name = $"Farm {farmId:N}"[..16], kind = "poultry",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
         var batchId = Guid.CreateVersion7();
         (await PostAsync(client, "/batches", new
         {
             id = batchId,
             customerId,
+            farmId,
             responsibleDoctorId = doctorId,
             animalCount = 1000,
             startDate = "2026-01-01",
@@ -177,7 +185,7 @@ public sealed class EntitlementSettlementIntegrationTests
             entitlementEnabled = true,
             entitlementSystem = "drug_profit",
         })).StatusCode.Should().Be(HttpStatusCode.OK);
-        return batchId;
+        return (batchId, farmId);
     }
 
     private static async Task IssueFieldInvoiceAsync(

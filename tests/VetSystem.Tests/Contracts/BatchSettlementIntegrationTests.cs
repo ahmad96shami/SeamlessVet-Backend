@@ -330,6 +330,68 @@ public sealed class BatchSettlementIntegrationTests
     }
 
     [Fact]
+    public async Task SettledBatch_CannotBeEditedOrDeleted()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var productId = await SeedFieldStockAsync(scope, admin.Id);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var (customerId, farmId, batchId) = await SeedFarmBatchAsync(client, admin.Id);
+        await IssueFieldInvoiceAsync(client, customerId, admin.Id, farmId, batchId, productId, quantity: 10m, total: 250m);
+
+        (await PostAsync(client, $"/batches/{batchId}/settle", new
+        {
+            lines = new[] { new { productId, settledUnitPrice = 20m } },
+            discountAmount = 0m,
+            idempotencyKey = $"settle-{batchId:N}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // A settled batch (تصفية) is frozen: neither PATCH nor DELETE is allowed (invariant #11).
+        var patched = await PatchAsync(client, $"/batches/{batchId}", new { animalCount = 999 });
+        patched.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await patched.Content.ReadAsStringAsync()).Should().Contain("batch_settled");
+
+        var deleted = await DeleteAsync(client, $"/batches/{batchId}");
+        deleted.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        (await deleted.Content.ReadAsStringAsync()).Should().Contain("batch_settled");
+
+        // The batch is untouched — still present (closed by the settlement), not soft-deleted.
+        await using var db = NewContext(scope, admin.Id);
+        (await db.Batches.AsNoTracking().AnyAsync(b => b.Id == batchId)).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task CreateBatch_WithoutFarm_IsRejected()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        await using var factory = new VetApiFactory();
+        using var client = AuthedClient(factory, admin);
+
+        var customerId = Guid.CreateVersion7();
+        (await PostAsync(client, "/customers", new
+        {
+            id = customerId, type = "poultry_farm", fullName = "No-Farm Co",
+            phonePrimary = $"+9705{Guid.NewGuid().ToString("N")[..8]}",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // A cycle (Dawra) requires a farm — the create is rejected (validation) when farmId is absent.
+        var resp = await PostAsync(client, "/batches", new
+        {
+            id = Guid.CreateVersion7(),
+            customerId,
+            responsibleDoctorId = admin.Id,
+            animalCount = 1000,
+            startDate = "2026-01-01",
+            supervisionFeeModel = FeeModel.FixedAmount,
+            supervisionFeeValue = 20m,
+        });
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
     public async Task SettledPrice_Overrides_BilledPrice_InTheLedgerAndProfit()
     {
         await using var scope = await PgTestScope.CreateAsync();
@@ -386,6 +448,13 @@ public sealed class BatchSettlementIntegrationTests
     private static async Task<HttpResponseMessage> PatchAsync(HttpClient client, string path, object body)
     {
         var request = new HttpRequestMessage(HttpMethod.Patch, path) { Content = JsonContent.Create(body) };
+        request.Headers.Add("Idempotency-Key", $"it-{Guid.NewGuid():N}"[..32]);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task<HttpResponseMessage> DeleteAsync(HttpClient client, string path)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Delete, path);
         request.Headers.Add("Idempotency-Key", $"it-{Guid.NewGuid():N}"[..32]);
         return await client.SendAsync(request);
     }

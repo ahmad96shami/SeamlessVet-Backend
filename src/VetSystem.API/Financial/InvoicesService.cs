@@ -65,12 +65,26 @@ public sealed class InvoicesService
         // POS deducts product lines from the environment's central warehouse.
         var deduction = await ResolveWarehouseLocationAsync(cancellationToken);
 
+        // A manager/admin can bill an active farm batch (Dawra) straight from the till — no field
+        // visit. The sale attributes to the batch's customer + farm (FarmId is resolved from the batch
+        // inside IssueItemizedAsync) so it lands in that batch's settlement and the farm owner ledger.
+        // The customer is taken from the batch, not the client, so the two can never be mismatched;
+        // a settled batch is rejected downstream by RequireBatchNotSettledAsync (invariant #11).
+        var customerId = request.CustomerId;
+        if (request.BatchId is { } batchId)
+        {
+            var batch = await _db.Batches.AsNoTracking()
+                .FirstOrDefaultAsync(b => b.Id == batchId, cancellationToken)
+                ?? throw new NotFoundException("batch", batchId);
+            customerId = batch.CustomerId;
+        }
+
         return await IssueItemizedAsync(
             invoiceType: InvoiceType.Pos,
             requestId: request.Id,
-            customerId: request.CustomerId,
+            customerId: customerId,
             visit: visit,
-            batchId: null,
+            batchId: request.BatchId,
             number: request.Number,
             invoiceDiscount: request.DiscountAmount,
             requestItems: request.Items,

@@ -149,6 +149,10 @@ public sealed class BatchesService
         var batch = await _db.Batches.FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
                     ?? throw new NotFoundException("batch", id);
 
+        // A settled batch (تصفية) is frozen: its settlement snapshots + ledger adjustments would go
+        // stale if its configuration changed underneath them (SCHEMA invariant #11).
+        await RequireNotSettledAsync(id, cancellationToken);
+
         if (request.ContractId is { } contractId)
         {
             await RequireExistsAsync(_db.Contracts.AnyAsync(c => c.Id == contractId, cancellationToken),
@@ -192,9 +196,27 @@ public sealed class BatchesService
         var batch = await _db.Batches.FirstOrDefaultAsync(b => b.Id == id, cancellationToken)
                     ?? throw new NotFoundException("batch", id);
 
+        // A settled batch is frozen — deleting it would orphan its settlement + ledger adjustments.
+        await RequireNotSettledAsync(id, cancellationToken);
+
         // AuditingInterceptor converts EntityState.Deleted into a soft-delete.
         _db.Batches.Remove(batch);
         await _db.SaveChangesAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// Rejects a write to a batch that already has a settlement (تصفية). Mirrors the
+    /// <c>batch_already_settled</c> / <c>batch_settled</c> guards on settle + invoice issuance, so a
+    /// settled batch is immutable end-to-end. Honors the soft-delete query filter, so an admin who
+    /// soft-deletes the settlement re-opens the batch (same as the settle slot).
+    /// </summary>
+    private async Task RequireNotSettledAsync(Guid batchId, CancellationToken cancellationToken)
+    {
+        if (await _db.BatchSettlements.AsNoTracking().AnyAsync(s => s.BatchId == batchId, cancellationToken))
+        {
+            throw new ConflictException("batch_settled",
+                "This batch has been settled (تصفية) and can no longer be edited or deleted.");
+        }
     }
 
     private void RequireEnvironment()

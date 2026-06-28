@@ -13,6 +13,9 @@ public sealed class BatchCreateRequestValidator : AbstractValidator<BatchCreateR
     public BatchCreateRequestValidator()
     {
         RuleFor(r => r.CustomerId).NotEmpty();
+        // A cycle (Dawra) always runs on a specific farm of the customer — the per-farm ledger +
+        // settlement route through it. The service additionally checks the farm belongs to the customer.
+        RuleFor(r => r.FarmId).NotEmpty();
         RuleFor(r => r.ResponsibleDoctorId).NotEmpty();
         RuleFor(r => r.AnimalCount).GreaterThanOrEqualTo(0);
 

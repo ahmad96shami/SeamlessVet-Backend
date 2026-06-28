@@ -200,11 +200,18 @@ public sealed class DoctorPartnerReleaseTests
     private static async Task<Guid> CreateBatchAsync(
         HttpClient client, Guid customerId, Guid doctorId, bool entitlementEnabled = true)
     {
+        var farmId = Guid.CreateVersion7();
+        (await PostAsync(client, "/farms", new
+        {
+            id = farmId, customerId, name = $"Farm {farmId:N}"[..16], kind = "poultry",
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
         var batchId = Guid.CreateVersion7();
         (await PostAsync(client, "/batches", new
         {
             id = batchId,
             customerId,
+            farmId,
             responsibleDoctorId = doctorId,
             animalCount = 1000,
             startDate = "2026-01-01",

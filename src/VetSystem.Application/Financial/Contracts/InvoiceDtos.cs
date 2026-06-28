@@ -57,7 +57,10 @@ public sealed record PosInvoiceRequest(
     decimal DiscountAmount,
     IReadOnlyList<InvoiceLineRequest> Items,
     IReadOnlyList<PaymentRequest> Payments,
-    string IdempotencyKey);
+    string IdempotencyKey,
+    // Bill an active farm batch (Dawra) straight from the till — the sale joins its settlement.
+    // Trailing-optional so positional callers are unaffected; the JSON body binds it by name.
+    Guid? BatchId = null);
 
 /// <summary>
 /// Field-visit invoice (M7 task 5). Linked to a visit and optionally a batch (drug-profit calc,
