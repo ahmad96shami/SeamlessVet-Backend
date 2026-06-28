@@ -83,12 +83,13 @@ public sealed class InventoryModule : IEndpointModule
         Guid? productId,
         string? search,
         bool? lowStockOnly,
+        bool? includeZeroStock,
         int? skip,
         int? take,
         CancellationToken cancellationToken)
     {
         var items = await svc.ListStockAsync(
-            locationType, locationId, productId, search, lowStockOnly, skip, take, cancellationToken);
+            locationType, locationId, productId, search, lowStockOnly, includeZeroStock, skip, take, cancellationToken);
         return TypedResults.Ok(items);
     }
 

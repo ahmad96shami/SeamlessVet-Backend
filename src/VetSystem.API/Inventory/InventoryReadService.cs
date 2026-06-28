@@ -41,6 +41,7 @@ public sealed class InventoryReadService
         Guid? productId,
         string? search,
         bool? lowStockOnly,
+        bool? includeZeroStock,
         int? skip,
         int? take,
         CancellationToken cancellationToken)
@@ -51,6 +52,17 @@ public sealed class InventoryReadService
         }
 
         var factor = 1m + (await LowStockThresholdPctAsync(cancellationToken) / 100m);
+
+        // POS catalog view: list EVERY sellable product at one location (default warehouse), with its
+        // on-hand quantity (0 when it was never received) — a LEFT JOIN, so a just-created item still
+        // appears (greyed/out-of-stock at the till) instead of being invisible. Consumables are
+        // excluded (M27 — they're taken out via the المستهلكات screen, never sold).
+        if (includeZeroStock == true)
+        {
+            return await ListProductsWithStockAsync(
+                locationType ?? StockLocation.Warehouse, locationId, productId, search, lowStockOnly,
+                factor, skip, take, cancellationToken);
+        }
 
         var query = _db.StockItems
             .AsNoTracking()
@@ -94,6 +106,82 @@ public sealed class InventoryReadService
                 x.p.PurchasePrice,
                 x.p.SellingPrice,
                 x.s.Quantity <= x.p.ReorderPoint * factor))
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// The POS catalog projection (<c>includeZeroStock=true</c>): every non-consumable product
+    /// LEFT-joined to its on-hand at <paramref name="locationType"/> (default warehouse), so an
+    /// unstocked product surfaces with quantity 0 (greyed/out-of-stock at the till) instead of being
+    /// invisible. Same response shape + low-stock threshold semantics as the joined stock list.
+    /// </summary>
+    private async Task<IReadOnlyList<StockLevelResponse>> ListProductsWithStockAsync(
+        string locationType,
+        Guid? locationId,
+        Guid? productId,
+        string? search,
+        bool? lowStockOnly,
+        decimal factor,
+        int? skip,
+        int? take,
+        CancellationToken cancellationToken)
+    {
+        // The location id reported on zero-stock rows (one warehouse per environment by design).
+        var resolvedLocationId = locationId
+            ?? await _db.StockItems.AsNoTracking()
+                .Where(s => s.LocationType == locationType)
+                .Select(s => (Guid?)s.LocationId)
+                .FirstOrDefaultAsync(cancellationToken)
+            ?? await _db.Warehouses.AsNoTracking()
+                .Select(w => (Guid?)w.Id)
+                .FirstOrDefaultAsync(cancellationToken)
+            ?? Guid.Empty;
+
+        var stockAtLocation = _db.StockItems.AsNoTracking().Where(s => s.LocationType == locationType);
+        if (locationId is { } lid) stockAtLocation = stockAtLocation.Where(s => s.LocationId == lid);
+
+        var products = _db.Products.AsNoTracking().Where(p => !p.IsConsumable);
+        if (productId is { } pid) products = products.Where(p => p.Id == pid);
+
+        if (!string.IsNullOrWhiteSpace(search))
+        {
+            var pattern = $"%{search.Trim()}%";
+            products = products.Where(p =>
+                EF.Functions.ILike(p.NameAr, pattern) ||
+                (p.NameLatin != null && EF.Functions.ILike(p.NameLatin, pattern)) ||
+                (p.Barcode != null && EF.Functions.ILike(p.Barcode, pattern)));
+        }
+
+        var projected = products.Select(p => new
+        {
+            Product = p,
+            Quantity = stockAtLocation.Where(s => s.ProductId == p.Id).Sum(s => (decimal?)s.Quantity) ?? 0m,
+        });
+
+        if (lowStockOnly == true)
+        {
+            projected = projected.Where(x => x.Quantity <= x.Product.ReorderPoint * factor);
+        }
+
+        return await projected
+            .OrderBy(x => x.Product.NameAr)
+            .Skip(ReportQuery.ClampSkip(skip))
+            .Take(ReportQuery.ClampTake(take))
+            .Select(x => new StockLevelResponse(
+                x.Product.Id,
+                x.Product.NameAr,
+                x.Product.NameLatin,
+                x.Product.Barcode,
+                x.Product.Category,
+                x.Product.UnitOfMeasure,
+                locationType,
+                resolvedLocationId,
+                x.Quantity,
+                x.Product.ReorderPoint,
+                x.Product.ExpirationDate,
+                x.Product.PurchasePrice,
+                x.Product.SellingPrice,
+                x.Quantity <= x.Product.ReorderPoint * factor))
             .ToListAsync(cancellationToken);
     }
 

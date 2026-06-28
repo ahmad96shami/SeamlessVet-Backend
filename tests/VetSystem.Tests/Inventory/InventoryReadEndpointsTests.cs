@@ -118,6 +118,58 @@ public sealed class InventoryReadEndpointsTests
             f.Id == seed.FieldInventoryId && f.DoctorId == seed.DoctorId && f.DoctorName == "د. ميدان");
     }
 
+    [Fact]
+    public async Task Stock_IncludeZeroStock_ListsUnstockedSellableProducts_AndExcludesConsumables()
+    {
+        await using var scope = await PgTestScope.CreateAsync();
+        var admin = await AdminTestSeed.SeedAdminAsync(scope);
+        var envId = scope.EnvironmentId;
+        var now = DateTimeOffset.UtcNow;
+
+        var stockedId = Guid.CreateVersion7();
+        var unstockedId = Guid.CreateVersion7();
+        var consumableId = Guid.CreateVersion7();
+        var warehouseId = Guid.CreateVersion7();
+
+        await using (var db = scope.CreateDbContext(new FakeCurrentUser { EnvironmentId = envId }))
+        {
+            db.Products.AddRange(
+                new Product
+                {
+                    Id = stockedId, EnvironmentId = envId, NameAr = "أ-مخزون", Category = ProductCategory.Product,
+                    PurchasePrice = 2m, SellingPrice = 5m, ReorderPoint = 0m, CreatedAt = now, UpdatedAt = now,
+                },
+                new Product
+                {
+                    Id = unstockedId, EnvironmentId = envId, NameAr = "ب-بدون-مخزون", Barcode = "ZERO-1",
+                    Category = ProductCategory.Product, PurchasePrice = 3m, SellingPrice = 6m, ReorderPoint = 0m,
+                    CreatedAt = now, UpdatedAt = now,
+                },
+                new Product
+                {
+                    Id = consumableId, EnvironmentId = envId, NameAr = "ج-مستهلك", Category = ProductCategory.Product,
+                    IsConsumable = true, PurchasePrice = 1m, SellingPrice = 2m, ReorderPoint = 0m,
+                    CreatedAt = now, UpdatedAt = now,
+                });
+            db.StockItems.Add(NewStock(envId, StockLocation.Warehouse, warehouseId, stockedId, 5m, now));
+            await db.SaveChangesAsync();
+        }
+
+        await using var factory = new VetApiFactory();
+        using var client = AuthorizedClient(factory, admin);
+
+        // includeZeroStock: the unstocked sellable product appears (qty 0); the consumable never does.
+        var withZero = await GetListAsync<StockRow>(client, "/inventory/stock?locationType=warehouse&includeZeroStock=true");
+        withZero.Should().Contain(r => r.ProductId == stockedId && r.Quantity == 5m);
+        withZero.Should().Contain(r => r.ProductId == unstockedId && r.Quantity == 0m);
+        withZero.Should().NotContain(r => r.ProductId == consumableId);
+
+        // Default (stocked rows only): the unstocked product is absent.
+        var stockedOnly = await GetListAsync<StockRow>(client, "/inventory/stock?locationType=warehouse");
+        stockedOnly.Should().Contain(r => r.ProductId == stockedId);
+        stockedOnly.Should().NotContain(r => r.ProductId == unstockedId);
+    }
+
     // ---- helpers ----
 
     private sealed record Seed(
